@@ -132,9 +132,12 @@ def problems_push(changed, langs):
         return [M("readme.names_empty_push")]
     if not changed:
         return [M("readme.changed_empty")]
-    multi = len(langs) > 1
-    # Multi-entry conditional form: none touched => not applicable
-    if multi and not any(name in changed for name in langs):
+    # Conditional form (all shapes): none touched => not applicable.
+    # A single-entry README group in a consumer repo (bilingual upstream
+    # fork with only README.md registered) must not turn every code-only
+    # push red — measured: a suite-only commit was blocked with
+    # readme.not_in_push(README.md) although no README was touched.
+    if not any(name in changed for name in langs):
         return []
     for name in langs:
         if name not in changed:
