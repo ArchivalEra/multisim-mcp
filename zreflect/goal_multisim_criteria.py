@@ -76,25 +76,30 @@ def production_path() -> int:
 
 
 def no_orthogonal() -> int:
-    bridge_ok = os.path.isfile(BRIDGE)
-    vendor_aware = False
-    wired = False
-    if os.path.isfile(BRIDGE):
-        src = open(BRIDGE, encoding="utf-8", errors="replace").read()
-        # vendor-aware core: suite resolved from the event cwd. The bridge may
-        # additionally reference the tool repo for its read-only lock file
-        # (owner-session write protection) — that is not suite wiring.
-        vendor_aware = ("find_suite_repo" in src
-                        and ("zcode-projects/Einfacht" not in src
-                             or "LOCK_FILE" in src))
-    if os.path.isfile(KIMI_CONFIG):
-        cfg = open(KIMI_CONFIG, encoding="utf-8", errors="replace").read()
-        wired = ("einfacht-bridge.py" in cfg
-                 and "SessionStart" in cfg and "PreToolUse" in cfg)
-    print("no_orthogonal bridge=%s vendor_aware=%s hooks_wired=%s"
-          % (bridge_ok, vendor_aware, wired))
-    return 0 if (bridge_ok and vendor_aware and wired) else 1
-
+    """Verification of this goal rides the repo's own production-path wiring:
+    git hooks chained by the vendored install.py (point at THIS repo's
+    reflect-hooks/gate.py), and next.py runs from the same vendor copy.
+    User-level host hooks are deliberately not evidence — they were removed
+    by the owner session (host does not decide per-repo wiring)."""
+    import os  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    hook = os.path.join(root, ".git", "hooks", "pre-commit")
+    gate = os.path.join(root, "reflect-hooks", "gate.py")
+    hook_ok = False
+    if os.path.isfile(hook) and os.path.isfile(gate):
+        text = open(hook, encoding="utf-8", errors="replace").read()
+        hook_ok = gate in text and "install.py --chain" in text
+    nxt = os.path.join(root, "zreflect", "next.py")
+    next_ok = os.path.isfile(nxt)
+    if next_ok:
+        proc = subprocess.run(["python3", nxt, root], capture_output=True,
+                              text=True, encoding="utf-8", errors="replace",
+                              timeout=20)
+        next_ok = proc.returncode == 0 and "tree_state" in proc.stdout
+    print("no_orthogonal local_hook=%s vendor_next=%s"
+          % (hook_ok, next_ok))
+    return 0 if (hook_ok and next_ok) else 1
 
 def no_requirements_in_git() -> int:
     """Requirements/RFP/brief documents are intent, not state: they must live
