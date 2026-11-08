@@ -81,13 +81,45 @@ TIMER8) that need an extra carrier derived from your own designs.
 - The `I/O operation on closed file` message from the stderr reader thread is
   a harmless shutdown race in `com_worker_client._read_error`.
 
-## Digital circuits (XSPICE gates) — verified limits
+## Digital circuits (XSPICE gates) — WORKING with bridge syntax
 
 - The command-file engine (`DoCommandLine`, used by
-  `run_circuit_experiment`) runs a plain SPICE that **rejects XSPICE code
-  models** (`Unable to identify XSPICE code model`): digital gates (AND2 /
-  OR2 …) are omitted from the analysis and read as constant 0. Analog-only
-  circuits are unaffected.
+  `run_circuit_experiment`) **does support XSPICE A-devices** — the earlier
+  "code model not identified" errors were port-shape mismatches, not a
+  missing kernel. The working form (research brief solved; verified):
+
+```
+* AND-OR: Y = (A AND B) OR C
+Va a_an 0 PULSE(0 5 5u 1n 1n 10u 20u)
+Vb b_an 0 PULSE(0 5 5u 1n 1n 20u 40u)
+Vc c_an 0 PULSE(0 5 40u 1n 1n 40u 80u)
+aADCa [a_an] [a_d] ADC
+aADCb [b_an] [b_d] ADC
+aADCc [c_an] [c_d] ADC
+aAND  [a_d b_d] n_and_d AND2
+aOR   [n_and_d c_d] y_d OR2
+aDAC  [y_d] [y_an] DAC
+Rload y_an 0 10k
+.MODEL ADC adc_bridge (in_low=2.5 in_high=2.5)
+.MODEL DAC dac_bridge (out_low=0 out_high=5 out_undef=0)
+.MODEL AND2 d_and (rise_delay=1n fall_delay=1n)
+.MODEL OR2 d_or (rise_delay=1n fall_delay=1n)
+.end
+```
+
+  Key points: analog↔digital needs explicit `adc_bridge`/`dac_bridge`
+  (the GUI auto-inserts them, the command-file netlist does not); gate
+  inputs/outputs are vector ports `[net ...]`; stimulus stays analog
+  (PULSE sources on the analog side); read results back from the analog
+  side after `dac_bridge` — the raw file then contains real voltages.
+
+- Verified: AND output high exactly on the A·B overlap windows, OR output
+  follows C; 97 stable samples, 0 truth-table violations (35 apparent
+  violations were all 1ns-gate-propagation edge samples).
+
+- The earlier `SetOutputRequest`-based native path also works but reads
+  one probe at a time; the command-file path yields the whole waveform in
+  one `write`.
 - Native interactive simulation works: open the circuit, add output probes
   (`probe_nets` / `include_experimental_probes=True` on
   `create_schematic_from_netlist`), request `V(OutProbe*)`, `RunSimulation`
