@@ -2075,7 +2075,16 @@ def _run_spice_netlist_impl(
     validate_spice_netlist(simulation_netlist)
 
     run_id = f"msre_{uuid.uuid4().hex[:16]}"
-    work_root = os.environ.get("MULTISIM_MCP_WORKDIR") or r"C:\msre_exp"
+    # Linux/Wine production path: the *server side* (Linux Python) must write
+    # the command files into the very same physical folder the Wine-side
+    # Multisim will read as C:\msre_exp — i.e. <prefix>/drive_c/msre_exp.
+    # A literal "C:\msre_exp" relative dir on the Linux side made Multisim
+    # source an empty folder (observed: silent simulation failure, empty log).
+    work_root = os.environ.get("MULTISIM_MCP_WORKDIR") or ""
+    if not work_root:
+        prefix = os.environ.get("WINEPREFIX", "").strip() or os.path.expanduser("~/.multisim143")
+        work_root = os.path.join(prefix, "drive_c", "msre_exp")
+        os.makedirs(work_root, exist_ok=True)
     if " " in work_root:
         raise ValueError(
             "MULTISIM_MCP_WORKDIR must not contain spaces because Multisim's "
@@ -2091,7 +2100,16 @@ def _run_spice_netlist_impl(
     with open(netlist_path, "w", encoding="utf-8") as fh:
         fh.write(simulation_netlist)
 
-    kept = [f"source {netlist_path}", *accepted_commands, f"write {raw_path}"]
+    def _win_form(p: str) -> str:
+        """Linux path under drive_c → its Windows name inside the same prefix."""
+        drive = os.path.join(prefix, "drive_c") + os.sep
+        if p.startswith(drive):
+            return "C:\\" + os.path.relpath(p, drive).replace(os.sep, "\\")
+        return p
+
+    kept = [f"source {_win_form(netlist_path)}",
+            *accepted_commands,
+            f"write {_win_form(raw_path)}"]
     with open(command_path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(kept) + "\n")
 

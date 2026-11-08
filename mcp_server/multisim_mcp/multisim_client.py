@@ -928,16 +928,46 @@ class Ms14Codec:
             f"in to the pinned npx fallback with {NPX_DOWNLOAD_ENV}=1"
         )
 
+    @classmethod
+    def _run_codec(cls, cmd: list[str]) -> "subprocess.CompletedProcess[str]":
+        """Run one codec subprocess, tolerating Wine's broken pipe stdio.
+
+        libuv (Node's I/O layer) fails with `open EBADF` under Wine whenever
+        stdin/stdout/stderr is a pipe — plain files work. The production path
+        on Linux (Wine COM worker) therefore redirects both streams to temp
+        files and reads them back; on native Windows nothing changes
+        (MULTISIM_MCP_WINE_COMPAT unset keeps capture_output verbatim).
+        """
+        if not os.environ.get("MULTISIM_MCP_WINE_COMPAT", "").strip():
+            return subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120,
+            )
+        import tempfile  # noqa: PLC0415
+        with tempfile.TemporaryDirectory(prefix="multisim-mcp-codec-") as tmp:
+            out_path = os.path.join(tmp, "out.log")
+            err_path = os.path.join(tmp, "err.log")
+            with open(os.path.join(tmp, "in.nul"), "wb") as nul, \
+                    open(out_path, "wb") as out_f, \
+                    open(err_path, "wb") as err_f:
+                proc = subprocess.run(
+                    cmd,
+                    stdin=nul,
+                    stdout=out_f,
+                    stderr=err_f,
+                    timeout=120,
+                )
+            out_text = open(out_path, encoding="utf-8", errors="replace").read()
+            err_text = open(err_path, encoding="utf-8", errors="replace").read()
+        return subprocess.CompletedProcess(cmd, proc.returncode, out_text, err_text)
+
     def decode(self, source: str, output_xml: Optional[str] = None) -> dict:
         source = os.path.abspath(source)
-        proc = subprocess.run(
-            [*self._base_cmd("ewd"), source],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=120,
-        )
+        proc = self._run_codec([*self._base_cmd("ewd"), source])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout or "ewd failed")
         generated = source + ".xml"
@@ -953,7 +983,7 @@ class Ms14Codec:
             output_ms14 or source_xml.removesuffix(".xml")
         )
         os.makedirs(os.path.dirname(output_ms14) or ".", exist_ok=True)
-        proc = subprocess.run(
+        proc = self._run_codec(
             [
                 *self._base_cmd("ewe"),
                 "--format",
@@ -961,12 +991,7 @@ class Ms14Codec:
                 "--output",
                 output_ms14,
                 source_xml,
-            ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=120,
+            ]
         )
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout or "ewe failed")
