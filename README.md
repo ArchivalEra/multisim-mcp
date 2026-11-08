@@ -5,6 +5,11 @@
 
 [中文（当前）](README.md) | [English](README.en.md)
 
+> **Fork 说明**：本仓库是 [`yxy050208/multisim-mcp`](https://github.com/yxy050208/multisim-mcp)
+> 的个人维护 fork,用于在其基础上继续开发和实验。上游代码保持 **MIT** 许可,
+> 本 fork 引入的修改以 **AGPL-3.0** 授权,详见文末 [License](#license) 与
+> [`LICENSE.addendum`](LICENSE.addendum)。欢迎继续向上游提 issue 和 PR。
+
 让 AI Agent 根据实验要求自动生成 Multisim 电路、运行仿真、提取实验数据，并导出
 电路图、CSV、波形图和实验报告。
 
@@ -396,5 +401,16 @@ job 存储格式保持兼容；实验 staging、报告、原子发布和回滚�
 
 ## License
 
-项目自有代码采用 MIT License。NI Multisim、商标、格式以及本地安装样本仍受其各自
-权利和许可条款约束。本仓库不应提交 NI 二进制、许可证材料或未确认可再分发的样本。
+本仓库是 [`yxy050208/multisim-mcp`](https://github.com/yxy050208/multisim-mcp) 的
+fork,采用双许可结构:
+
+- **上游代码 — MIT License**(见 [`LICENSE`](LICENSE)):上游项目
+  [`yxy050208/multisim-mcp`](https://github.com/yxy050208/multisim-mcp)
+  版权归 Multisim MCP contributors 所有,本仓库在其基础上继续维护。
+- **本 fork 的修改 — GNU AGPL-3.0**(见 [`LICENSE.addendum`](LICENSE.addendum)):
+  超出上游代码的全部修改、新增内容归 ArchivalEra 所有,按 AGPL-3.0-only 授权。
+  整体分发本 fork 时,上游部分按 MIT、修改部分按 AGPL-3.0 提供。
+
+NI Multisim、商标、格式以及本地安装样本仍受其各自权利和许可条款约束。本仓库
+不应提交 NI 二进制、许可证材料或未确认可再分发的样本。欢迎向上游提 PR 和
+issue;贡献到上游的代码遵循上游的 MIT 许可。

@@ -5,6 +5,12 @@
 
 [中文](README.md) | [English (current)](README.en.md)
 
+> **Fork notice**: this repository is a personal maintenance fork of
+> [`yxy050208/multisim-mcp`](https://github.com/yxy050208/multisim-mcp).
+> Upstream code remains **MIT**-licensed; modifications introduced in this fork
+> are licensed under **AGPL-3.0** — see [License](#license) and
+> [`LICENSE.addendum`](LICENSE.addendum). Issues and PRs for upstream are welcome.
+
 An unofficial local MCP server that lets an AI agent generate editable NI
 Multisim circuits from constrained SPICE input, run experiments, export data,
 and create reproducible reports.
@@ -152,8 +158,10 @@ directory schema and integrity contract.
 
 ## Public-release asset policy
 
-Project-owned code is MIT licensed. XML templates derived from locally licensed
-NI samples are not covered by that code license and must not be uploaded without
+Project-owned code upstream is MIT licensed; modifications introduced by this
+ArchivalEra fork are AGPL-3.0 licensed (see [License](#license)). XML templates
+derived from locally licensed
+NI samples are not covered by either code license and must not be uploaded without
 a separate redistribution review. The public repository should contain the
 extractor, manifest, code, tests, and documentation—not extracted samples,
 decoded designs, type-library dumps, experiment output, or development wheels.
@@ -335,6 +343,19 @@ AI engineering circuit control-plane positioning are documented in the
 
 ## License
 
-Project-owned code is available under the MIT License. NI Multisim, trademarks,
-file formats, installed samples, and third-party models remain subject to their
-respective terms.
+This repository is a fork of [`yxy050208/multisim-mcp`](https://github.com/yxy050208/multisim-mcp)
+and uses a dual-license structure:
+
+- **Upstream code — MIT License** (see [`LICENSE`](LICENSE)): the upstream
+  project is Copyright (c) 2026 Multisim MCP contributors; this fork is
+  maintained on top of it.
+- **Fork modifications — GNU AGPL-3.0** (see [`LICENSE.addendum`](LICENSE.addendum)):
+  all changes and additions beyond the upstream code are Copyright (c) 2026
+  ArchivalEra and licensed under AGPL-3.0-only. Distributing this fork as a
+  whole conveys the upstream parts under MIT and the modifications under
+  AGPL-3.0.
+
+NI Multisim, trademarks, file formats, installed samples, and third-party
+models remain subject to their respective terms. Pull requests and issues to
+the upstream project are welcome; contributions submitted upstream follow the
+upstream MIT license.
