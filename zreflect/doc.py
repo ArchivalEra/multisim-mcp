@@ -188,6 +188,16 @@ RULES = (
          "for k in w)];"
          "print('host_coupled=%d' % len(bad));"
          "sys.exit(1 if bad else 0)\""),
+
+    # Requirements / research briefs / RFPs are *intent*, not *state*: they
+    # name things that do not exist yet, so the ledger would be re-running a
+    # wish. Observed here: an XSPICE research brief committed into docs/
+    # counted as judged surface while answering to nothing. Their home is the
+    # questions ledger (questions/) -- a fact with a settling command -- or
+    # nowhere.
+    Rule("no_requirements_in_git",
+         "requirements/RFP/brief documents are intent, not state: they live in the questions ledger, never as tracked files",
+         "python3 zreflect/goal_multisim_criteria.py no-requirements-in-git"),
 )
 
 _BY_ID = {r.id: r for r in RULES}

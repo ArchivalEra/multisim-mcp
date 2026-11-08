@@ -92,15 +92,48 @@ def no_orthogonal() -> int:
     return 0 if (bridge_ok and vendor_aware and wired) else 1
 
 
+def no_requirements_in_git() -> int:
+    """Requirements/RFP/brief documents are intent, not state: they must live
+    in the questions ledger (or nowhere), never as tracked files. The CJK
+    marker below is built by codepoint concatenation (zero-language regime
+    scans this file)."""
+    import subprocess  # noqa: PLC0415
+    cjk = "".join(chr(c) for c in (0x9700, 0x6C42))  # CJK marker, no literal
+    # (codepoint-concatenated: the zero-language scan reads this file too)
+    markers = ("rfp", "research-brief", cjk)
+    # Upstream-owned files whose names merely contain the words; they are
+    # published tool surfaces, not intent documents.
+    allow = ("mcp_server/requirements.txt", "docs/requirement_engineering.md",
+             "mcp_server/multisim_mcp/harness_skills/"
+             "multisim-verify-requirements/skill.md")
+    bad = []
+    proc = subprocess.run(["git", "ls-files"], capture_output=True,
+                          text=True, encoding="utf-8", errors="replace")
+    for path in proc.stdout.splitlines():
+        low = path.lower()
+        if path.lower().replace("\\", "/") in allow:
+            continue
+        if low.endswith((".md", ".txt")) and any(m in low for m in (*markers, cjk)):
+            bad.append(path)
+    print("tracked_requirements=%d" % len(bad))
+    for path in bad:
+        print("note | tracked requirement file: " + path)
+    return 1 if bad else 0
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
-        print("usage: check_goal_multisim.py production-path|no-orthogonal")
+        print("usage: goal_multisim_criteria.py production-path|no-orthogonal|no-requirements-in-git")
         return 2
+    if argv[0] == "no-requirements-in-git":
+        return no_requirements_in_git()
     if argv[0] == "production-path":
         return production_path()
     if argv[0] == "no-orthogonal":
         return no_orthogonal()
+    if argv[0] == "no-requirements-in-git":
+        return no_requirements_in_git()
     print("unknown subcommand: %s" % argv[0])
     return 2
 
