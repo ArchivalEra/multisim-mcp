@@ -81,8 +81,12 @@ def no_orthogonal() -> int:
     wired = False
     if os.path.isfile(BRIDGE):
         src = open(BRIDGE, encoding="utf-8", errors="replace").read()
-        vendor_aware = ("zcode-projects/Einfacht" not in src
-                        and "find_suite_repo" in src)
+        # vendor-aware core: suite resolved from the event cwd. The bridge may
+        # additionally reference the tool repo for its read-only lock file
+        # (owner-session write protection) — that is not suite wiring.
+        vendor_aware = ("find_suite_repo" in src
+                        and ("zcode-projects/Einfacht" not in src
+                             or "LOCK_FILE" in src))
     if os.path.isfile(KIMI_CONFIG):
         cfg = open(KIMI_CONFIG, encoding="utf-8", errors="replace").read()
         wired = ("einfacht-bridge.py" in cfg
@@ -112,6 +116,10 @@ def no_requirements_in_git() -> int:
     for path in proc.stdout.splitlines():
         low = path.lower()
         if path.lower().replace("\\", "/") in allow:
+            continue
+        # questions/ is the sanctioned ledger: intent documents live there
+        # (with status/settling), not in the judged surface.
+        if low.startswith("questions/"):
             continue
         if low.endswith((".md", ".txt")) and any(m in low for m in (*markers, cjk)):
             bad.append(path)
