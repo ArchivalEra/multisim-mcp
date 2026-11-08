@@ -80,3 +80,22 @@ TIMER8) that need an extra carrier derived from your own designs.
   banner). Non-InvertingOpAmp.ms14 works.
 - The `I/O operation on closed file` message from the stderr reader thread is
   a harmless shutdown race in `com_worker_client._read_error`.
+
+## Digital circuits (XSPICE gates) — verified limits
+
+- The command-file engine (`DoCommandLine`, used by
+  `run_circuit_experiment`) runs a plain SPICE that **rejects XSPICE code
+  models** (`Unable to identify XSPICE code model`): digital gates (AND2 /
+  OR2 …) are omitted from the analysis and read as constant 0. Analog-only
+  circuits are unaffected.
+- Native interactive simulation works: open the circuit, add output probes
+  (`probe_nets` / `include_experimental_probes=True` on
+  `create_schematic_from_netlist`), request `V(OutProbe*)`, `RunSimulation`
+  (`run_transient`), then `GetOutputData` — numbers flow as time-stamped
+  rows. Output names must match `enum_outputs` exactly (`V(OutProbe)`,
+  `D(PR1)` for digital probes in NI's own samples).
+- The worker holds the only COM session: a Multisim GUI instance started
+  elsewhere makes `Connect` fail with E_ACCESSDENIED. Kill other instances
+  (or let the worker own the app) before automating.
+- Verified AND-OR (Y=(A·B)+C): AND output high exactly on the A·B overlap
+  windows; OR output follows C once high. Logic matches the truth table.

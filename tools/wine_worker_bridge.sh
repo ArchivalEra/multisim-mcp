@@ -53,7 +53,9 @@ case "$force" in
     unset DISPLAY
     ;;
   x11)
-    export DISPLAY="${MSIM_WINE_DISPLAY:-:88}"
+    # Keep the caller's DISPLAY when present — Multisim's COM server must
+    # land on a live display or activation is refused (E_ACCESSDENIED).
+    export DISPLAY="${DISPLAY:-${MSIM_WINE_DISPLAY:-:88}}"
     ;;
   "")
     if want_wayland; then
