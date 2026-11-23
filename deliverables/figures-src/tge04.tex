@@ -1,0 +1,42 @@
+\documentclass[border=14pt]{standalone}
+\usepackage{ctex}
+\usepackage{tikz}
+\usetikzlibrary{calc}
+\begin{document}
+\begin{tikzpicture}[x=1cm, y=1cm, font=\normalsize, line width=0.8pt]
+
+% fig-ge-04 阻抗三角形（三边单位全部是 Ω —— 禁令①）
+% 直角三角形：横边 R、竖边 X = XL - XC、斜边 Z、夹角 phi
+% 文字区在图形外（右侧与下方），图内只画三角形与边标
+
+% 三角形顶点
+\coordinate (A) at (0,0);      % 直角
+\coordinate (B) at (4.0,0);    % R 端
+\coordinate (C) at (0,2.6);    % X 端
+
+\draw[thick] (A) -- (B) -- (C) -- cycle;
+
+% 直角符号
+\draw[line width=0.6pt] (0.28,0) -- (0.28,0.28) -- (0,0.28);
+
+% 边标注（写在边外侧，不压线）
+\node[anchor=north, font=\small] at (2.0,-0.18) {R（Ω）};
+\node[anchor=east, font=\small] at (-0.16,1.3) {X = XL − XC（Ω）};
+\node[anchor=south west, font=\small] at (2.35,1.55) {Z（Ω）};
+
+% 夹角 phi：在顶点 B 处，弧画在三角形内部
+\draw[line width=0.6pt] ($(B)+(-0.9,0)$) arc (180:147:0.9);
+\node[font=\small] at (3.35,0.30) {$\varphi$};
+
+% 右侧文字区（x>=4.6，与三角形不重叠）
+\node[anchor=north west, font=\small] at (4.8,2.6) {Z = √(R² + X²)};
+\node[anchor=north west, font=\small] at (4.8,2.2) {$\varphi$ = arctan(X / R)};
+\node[anchor=north west, font=\small] at (4.8,1.3) {三个边都是 Ω};
+\node[anchor=north west, font=\small] at (4.8,0.9) {同一个量纲才能构成三角形};
+
+% 下方说明
+\node[anchor=north west, font=\small] at (0,-0.75)
+  {X 为电抗：感抗 XL 与容抗 XC 的代数和};
+
+\end{tikzpicture}
+\end{document}

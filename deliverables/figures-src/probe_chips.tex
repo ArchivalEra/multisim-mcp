@@ -1,0 +1,37 @@
+\documentclass[border=10pt]{standalone}
+\usepackage{ctex}
+\usepackage[european]{circuitikz}
+\begin{document}
+\begin{circuitikz}
+% 测试 dipchip 的自定义引脚标注
+\ctikzset{multipoles/dipchip/width=2.0}
+\draw (0,0) node[dipchip, num pins=12, hide numbers, no marks] (c) {};
+\node[right, font=\small] at (c.bpin 1) {CP$_0$};
+\node[right, font=\small] at (c.bpin 2) {CP$_1$};
+\node[right, font=\small] at (c.bpin 3) {R$_0$(1)};
+\node[right, font=\small] at (c.bpin 4) {R$_0$(2)};
+\node[right, font=\small] at (c.bpin 5) {S$_9$(1)};
+\node[right, font=\small] at (c.bpin 6) {S$_9$(2)};
+\node[left, font=\small] at (c.bpin 12) {Q$_3$};
+\node[left, font=\small] at (c.bpin 11) {Q$_2$};
+\node[left, font=\small] at (c.bpin 10) {Q$_1$};
+\node[left, font=\small] at (c.bpin 9) {Q$_0$};
+
+% 测试 dipchip 顶部标签
+\node[above] at (c.north) {74LS290};
+
+% 测试 74LS161
+\draw (5,0) node[dipchip, num pins=12, hide numbers, no marks] (c2) {};
+\node[above] at (c2.north) {74LS161};
+\node[right, font=\small] at (c2.bpin 1) {$\overline{\text{R}_\text{D}}$};
+\node[right, font=\small] at (c2.bpin 2) {$\overline{\text{L}_\text{D}}$};
+\node[right, font=\small] at (c2.bpin 3) {D$_3$D$_2$D$_1$D$_0$};
+\node[right, font=\small] at (c2.bpin 4) {CP};
+\node[right, font=\small] at (c2.bpin 5) {EP ET};
+\node[left, font=\small] at (c2.bpin 9) {CO};
+\node[left, font=\small] at (c2.bpin 10) {Q$_3$Q$_2$Q$_1$Q$_0$};
+
+% 测试 european nand port 与 dipchip 的组合
+\draw (5,3.5) node[european nand port] (nand) {};
+\end{circuitikz}
+\end{document}

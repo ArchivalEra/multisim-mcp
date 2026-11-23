@@ -8,11 +8,11 @@ spec); the engine is generic and repo-agnostic. Spec file:
         { "path": "build/113/link-web.sh",
           "must_contain": ["ALLOW_TABLE_GROWTH=1"],
           "must_not_contain": ["-flto"],
-          "why": "dlopen needs a growable function table; -flto is the falsified lever" } ] }
+        } ] }
 
 The engine only reads files -- **no builds, no containers, no network** -- so it
 can run in pre-commit. Zero-value guards: empty checklist / a check without a
-path / an unreadable file => all reported (never a silent pass). Requiring `why`
+path / an unreadable file => all reported (never a silent pass). Requiring a reason
 is deliberate: a check with no stated reason is one nobody dares to delete, and
 it turns into a zombie.
 
@@ -21,16 +21,17 @@ it cannot tell comments from code (a snippet inside a comment still counts as
 "present"). What it proves is "this text is still there", not "the code really
 uses it". The strength ceiling of a declarative check is the shape of the text
 it matches. For stronger guarantees, do not use grep: that is the job of
-`calibrate` (measures the **artifact**) or `witness` (measures the **source**).
-Orthogonal to `calibrate` (issue #6, item 1) -- keep them apart: one guards the
-**measurement instruments**, the other guards **the repo files themselves**
-(what recipes / source code should look like).
+`calibrate` (issue #6, item 1). Orthogonal to this gate -- keep them apart: one
+guards the **measurement instruments** (does the command measure what it
+claims), the other guards **the repo files themselves** (what the source should
+look like).
 
 **Pluggable**: `REFLECT_INVARIANTS` unset => explicitly not enabled, exit 0
 (repos that do not configure it are entirely unaffected; the discovery-based
 roster still enrolls it, and the selftest still proves it can go red).
-Connection to `collect.py` principle 5: the invariants file is the input
-landing spot; the invariants gate is the cheap origin invariant for that spot.
+The invariants file is the **input landing spot**; the invariants gate is the
+cheap origin invariant for that spot -- provenance must not require re-running
+the expensive thing.
 
 Usage (run directly, cwd = repo root):
     python3 zreflect/check_invariants.py [--selftest]
@@ -43,18 +44,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gate import (  # noqa: E402
-    fatal,
-    finish,
-    load_spec,
-    main_selftest_or,
-    meta,
-    off,
-    repo,  # noqa: E402
-)
+import gate  # noqa: E402
+from gate import finish, main_selftest_or, meta, repo  # noqa: E402
 from i18n import M  # noqa: E402
-
-INVARIANTS_RAW = os.environ.get("REFLECT_INVARIANTS", "").strip()
 
 
 def _shape_problems(c):
@@ -68,43 +60,51 @@ def _shape_problems(c):
     """
     if not isinstance(c, dict):
         return [M("invariants.not_object", entry=c)], None
-    path = str(c.get("path") or "").strip()
-    why = str(c.get("why") or "").strip()
+    raw_path = c.get("path")
+    path = raw_path.strip() if isinstance(raw_path, str) else ""
     mc, mnc = c.get("must_contain"), c.get("must_not_contain")
     if not path:
         return [M("invariants.missing_path", entry=c)], None
-    out = [] if why else [M("invariants.missing_why", path=path)]
     crit = _criteria_problems(path, mc, mnc)
     if crit is not None:
-        return out + crit, None
-    return out, (path, why, mc or [], mnc or [])
+        return crit, None
+    return [], (path, mc or [], mnc or [])
 
 
 def _criteria_problems(path, mc, mnc):
-    """Shape validation for the criteria fields (must_contain / must_not_contain).
-
-    Returns None = shape usable; returns a list = shape broken (caller exits
-    early). The three bad shapes each get a guard (no criteria / not a list /
-    element not a string), split out of `_shape_problems` -- what remains over
-    there is "collect values field by field"; this one is "the criteria itself".
-    """
+    """Shape validation for the criteria fields (must_contain / must_not_contain)."""
     if not isinstance(mc, list) and not isinstance(mnc, list):
         return [M("invariants.no_criteria", path=path)]
     if (mc is not None and not isinstance(mc, list)) or \
             (mnc is not None and not isinstance(mnc, list)):
         return [M("invariants.not_string_list", path=path)]
-    if any(not isinstance(x, str) for x in (mc or [])) or \
-            any(not isinstance(x, str) for x in (mnc or [])):
+    if not (mc or []) and not (mnc or []):
+        return [M("invariants.no_criteria", path=path)]
+    if any(not isinstance(x, str) or not x for x in (mc or [])) or \
+            any(not isinstance(x, str) or not x for x in (mnc or [])):
         return [M("invariants.fragment_not_string", path=path)]
     return None
 
 
-def _content_problems(path, why, mc, mnc, read):
+def _safe_repo_read(p):
+    target = repo(p)
+    root_real = os.path.realpath(repo())
+    target_real = os.path.realpath(target)
+    try:
+        inside = os.path.commonpath((root_real, target_real)) == root_real
+    except ValueError:
+        inside = False
+    if not inside or os.path.islink(target):
+        raise OSError("path escapes repo or is symlink")
+    return open(target_real, encoding="utf-8").read()
+
+
+def _content_problems(path, mc, mnc, read):
     """Snippet comparison: every `must_contain` must be present, every
     `must_not_contain` must be absent."""
     try:
         text = read(path)
-    except OSError:
+    except (OSError, UnicodeError):
         return [M("invariants.unreadable", path=path)]
     out = []
     for frag in mc:
@@ -115,11 +115,11 @@ def _content_problems(path, why, mc, mnc, read):
             # `^[A-Z][A-Z0-9_]*:` (otherwise a single translation could masquerade
             # as a machine contract line; see i18n._validate).
             out.append(M("invariants.drift_missing", marker="DRIFT",
-                         path=path, fragment=frag, why=why))
+                         path=path, fragment=frag))
     for frag in mnc:
         if frag in text:
             out.append(M("invariants.drift_forbidden", marker="DRIFT",
-                         path=path, fragment=frag, why=why))
+                         path=path, fragment=frag))
     return out
 
 
@@ -127,41 +127,46 @@ def problems(checks, read=None):
     """Pure function: return the problem list (empty = green). No printing during
     the selftest.
 
-    `read(path) -> str` is injectable (a fake filesystem for the selftest -- if
-    real files entered the selftest, the selftest would depend on the machine).
-    The criterion is the **presence/absence** of a snippet (grep level; see the
-    boundary in the module docstring).
-
-    Each half is its own helper (shape / content): with a bad shape there is no
-    comparable snippet, so an early exit is mandatory -- merged into one body,
-    5 shape guards + 2 content guards = complexity 14.
+    `read(path) -> str` is injectable (a fake filesystem for the selftest; real
+    files would make it depend on the machine). The criterion is the
+    **presence/absence** of a snippet (grep level; see the module docstring).
+    Empty `checks` => `invariants.empty`; otherwise `_check_one_problems` judges
+    each check in order.
     """
     if not checks:
         return [M("invariants.empty")]
-    read = read or (lambda p: open(repo(p), encoding="utf-8").read())
+    read = read or _safe_repo_read
     out = []
     for c in checks:
-        shape_probs, spec = _shape_problems(c)
-        out += shape_probs
-        if spec is not None:
-            out += _content_problems(*spec, read=read)
+        out += _check_one_problems(c, read)
     return out
+
+
+def _check_one_problems(c, read):
+    """Shape first, then content: with a bad shape there is no comparable
+    snippet, so an early exit is mandatory. Returns shape problems plus content
+    problems from `_content_problems(path, mc, mnc, read=read)` when a spec exists.
+    """
+    shape_probs, spec = _shape_problems(c)
+    if spec is None:
+        return shape_probs
+    path, mc, mnc = spec
+    return shape_probs + _content_problems(path, mc, mnc, read=read)
 
 
 def run(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    name = INVARIANTS_RAW
-    if not name:
-        return off(M("invariants.off"))
-    spec_path = repo(name)
-    if not os.path.exists(spec_path):
-        return fatal(M("invariants.spec_missing", name=name))
-    spec, err = load_spec(spec_path)
-    if err:
-        return fatal(M("invariants.spec_broken", name=spec_path, error=err))
+    spec, spec_name, rc = gate.load_gate_spec(
+        argv, "REFLECT_INVARIANTS",
+        off_msg=lambda _n: M("invariants.off"),
+        missing_msg=lambda n: M("invariants.spec_missing", name=n),
+        broken_msg=lambda n, err: M("invariants.spec_broken", name=repo(n), error=err),
+    )
+    if rc is not None:
+        return rc
     checks = spec.get("checks") if isinstance(spec, dict) else None
     if not isinstance(checks, list):
-        return fatal(M("invariants.bad_shape", path=spec_path))
+        return gate.fatal(M("invariants.bad_shape", path=repo(spec_name)))
     return finish(M("invariants.title"), problems(checks),
                   M("invariants.ok", count=len(checks)))
 
@@ -180,15 +185,15 @@ def _cases_ok(read):
     """(1) Compliant input: nothing reported; presence/absence both as declared."""
     return [
         ("invariants.must_contain_present",
-         lambda: problems([{"path": "a.sh", "why": "w",
+         lambda: problems([{"path": "a.sh",
                             "must_contain": ["ALLOW_TABLE_GROWTH=1"]}],
                          read=read) == []),
         ("invariants.must_not_contain_absent",
-         lambda: problems([{"path": "a.sh", "why": "w",
+         lambda: problems([{"path": "a.sh",
                             "must_not_contain": ["-flto"]}],
                          read=read) == []),
         ("invariants.both_criteria_met",
-         lambda: problems([{"path": "a.sh", "why": "w",
+         lambda: problems([{"path": "a.sh",
                             "must_contain": ["ALLOW_TABLE_GROWTH=1"],
                             "must_not_contain": ["-flto"]}],
                          read=read) == []),
@@ -200,24 +205,17 @@ def _cases_content(read):
     return [
         ("\u2605 invariants.drift_missing",
          lambda: [x.code for x in problems(
-             [{"path": "a.sh", "why": "w", "must_contain": ["-flto"]}],
+             [{"path": "a.sh", "must_contain": ["-flto"]}],
              read=read)] == ["invariants.drift_missing"]),
         ("\u2605 invariants.drift_forbidden",
          lambda: [x.code for x in problems(
-             [{"path": "a.sh", "why": "w",
+             [{"path": "a.sh",
                "must_not_contain": ["ALLOW_TABLE_GROWTH=1"]}],
              read=read)] == ["invariants.drift_forbidden"]),
         ("\u2605 invariants.unreadable",
          lambda: [x.code for x in problems(
-             [{"path": "b.sh", "why": "w", "must_contain": ["x"]}],
+             [{"path": "b.sh", "must_contain": ["x"]}],
              read=read)] == ["invariants.unreadable"]),
-        # A missing why is reported **first** (it does not continue: the same
-        # entry may also carry DRIFT, so both problems get reported)
-        ("\u2605 invariants.missing_why",
-         lambda: [x.code for x in problems(
-             [{"path": "a.sh", "must_contain": ["x"]}],
-             read=read)] == ["invariants.missing_why",
-                             "invariants.drift_missing"]),
     ]
 
 
@@ -226,11 +224,11 @@ def _cases_shape(read):
     return [
         ("\u2605 invariants.missing_path",
          lambda: [x.code for x in problems(
-             [{"why": "w", "must_contain": ["x"]}],
+             [{"must_contain": ["x"]}],
              read=read)] == ["invariants.missing_path"]),
         ("\u2605 invariants.no_criteria",
          lambda: [x.code for x in problems(
-             [{"path": "a.sh", "why": "w"}],
+             [{"path": "a.sh"}],
              read=read)] == ["invariants.no_criteria"]),
         ("\u2605 invariants.not_object",
          lambda: [x.code for x in problems(["not-a-dict"], read=read)
@@ -238,12 +236,12 @@ def _cases_shape(read):
         ("\u2605 invariants.not_string_list",
          # one side a list, the other not (both sides non-list is no_criteria's case)
          lambda: [x.code for x in problems(
-             [{"path": "a.sh", "why": "w", "must_contain": ["x"],
+             [{"path": "a.sh", "must_contain": ["x"],
                "must_not_contain": "y"}],
              read=read)] == ["invariants.not_string_list"]),
         ("\u2605 invariants.fragment_not_string",
          lambda: [x.code for x in problems(
-             [{"path": "a.sh", "why": "w", "must_contain": [1]}],
+             [{"path": "a.sh", "must_contain": [1]}],
              read=read)] == ["invariants.fragment_not_string"]),
     ]
 

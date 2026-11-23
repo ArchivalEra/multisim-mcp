@@ -48,48 +48,24 @@ Selftest: --selftest (runner-injected; never touches real docker).
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import gate  # noqa: E402
-import knobs  # noqa: E402
-import machine  # noqa: E402
-from gate import (  # noqa: E402
-    fatal,
-    finish,
-    load_spec,
-    main_selftest_or,
-    meta,
-    off,
-    repo,  # noqa: E402
-)
-from i18n import M  # noqa: E402
-
-# Derived from the knob registry (single origin) -- a handwritten literal would
-# drift from it (the most expensive class of debt in this repo).
-DEFAULT_SPEC = knobs.REGISTRY["REFLECT_PINS"][1]
-
-
-def resolve_spec(argv, knob=""):
-    """See `gate.resolve_spec`: the implementation lives in one place; this only
-    binds this gate's default name."""
-    return gate.resolve_spec(argv, knob, DEFAULT_SPEC)
+from gate import main_selftest_or, meta, repo  # noqa: E402
+from i18n import M, Message  # noqa: E402
 
 
 def _run(cmd):
-    try:
-        p = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60,
-                           encoding="utf-8", errors="replace")
-        return p.returncode, p.stdout.strip()
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return -1, str(e)
+    rc, out = gate.run_cmd(cmd)
+    return (-1 if rc is None else rc), out.strip()
 
 
 def _required_field_problems(p):
-    """A pin entry missing a required field (name / worktree) => report (the
-    family rule that why/name are mandatory)."""
+    """A pin entry missing a required field (name / worktree) => report."""
     return [M("pins.pin_missing_field", field=f, entry=p)
             for f in ("name", "worktree") if not p.get(f)]
 
@@ -101,7 +77,8 @@ def _head_problems(p, root, run):
     if not os.path.isdir(wt):
         return [M("pins.worktree_missing", name=p["name"],
                   path=p["worktree"])], None
-    rc, head = run("git -C %s rev-parse HEAD" % wt)
+    wt_arg = shlex.quote(wt.replace("\\", "/") if os.name == "nt" else wt)
+    rc, head = run("git -C %s rev-parse HEAD" % wt_arg)
     if rc != 0:
         return [M("pins.head_unreadable", name=p["name"])], None
     return [], head
@@ -112,42 +89,53 @@ def _tree_pin_problems(p, head, run):
 
     Returns (problems, skips).
     """
-    problems, skips = [], []
+    problems: list[Message] = []
+    skips: list[Message] = []
+    if p.get("optional"):
+        problems.append(M("gate.optional_forbidden", name=p["name"]))
     rc, out = run(p["stamp_read"])
     if rc != 0 or not out:
-        skips.append(M("pins.stamp_unreadable", name=p["name"]))
+        problems.append(M("pins.stamp_unreadable", name=p["name"]))
         return problems, skips
     parts = out.split()
-    if len(parts) < 3:
+    if len(parts) < 4:
         problems.append(M("pins.stamp_malformed", name=p["name"], actual=out[:40]))
         return problems, skips
     if parts[2] != head:
         problems.append(M("pins.commit_mismatch", name=p["name"],
                           declared=parts[2][:12], actual=head[:12]))
-    if len(parts) > 3 and parts[3] not in ("0", ""):
+    if parts[3] != "0":
         problems.append(M("pins.dirty", name=p["name"], count=parts[3]))
     return problems, skips
 
 
 def _version_pin_problems(p, run):
     """kind=version: the first line of the command output must contain
-    expect_version. Returns (problems, skips)."""
-    problems, skips = [], []
+    expect_version (token-bounded). Returns (problems, skips)."""
+    import re  # noqa: PLC0415
+    problems: list[Message] = []
+    skips: list[Message] = []
+    if p.get("optional"):
+        problems.append(M("gate.optional_forbidden", name=p["name"]))
     rc, out = run(p.get("version_read", ""))
     first = out.splitlines()[0] if out else ""
     if rc != 0 or not first:
-        skips.append(M("pins.version_unreadable", name=p["name"]))
+        problems.append(M("pins.version_unreadable", name=p["name"]))
         return problems, skips
-    if p.get("expect_version") and p["expect_version"] not in first:
+    expect = p.get("expect_version")
+    if not expect:
+        problems.append(M("pins.pin_missing_field", field="expect_version", entry=p))
+    elif not re.search(r"(?<![0-9A-Za-z.])%s(?![0-9A-Za-z.])" % re.escape(expect), first):
         problems.append(M("pins.version_drift", name=p["name"],
-                          declared=p["expect_version"], actual=first[:48]))
+                          declared=expect, actual=first[:48]))
     return problems, skips
 
 
 def _pin_problems(p, root, run):
     """The three assertions for one pin (fields / HEAD / kind dispatch).
     Returns (problems, skips)."""
-    problems, skips = _required_field_problems(p), []
+    problems = _required_field_problems(p)
+    skips: list[Message] = []
     if problems:
         # A missing required field ends it here (the HEAD / kind reads below all
         # need name/worktree; the missing field is itself the reportable fact --
@@ -175,10 +163,12 @@ def check(spec, run=_run, root=None):
     under check; the selftest passes a fixture directory).
     """
     root = repo() if root is None else root
-    pins = spec.get("pins") or []
-    if not pins:
+    if not isinstance(spec, dict):
+        return [M("pins.spec_broken", name="pins.json", error="spec must be an object")], []
+    pins = spec.get("pins")
+    if not isinstance(pins, list) or not pins:
         return [M("pins.empty")], []
-    problems, skips = [], []
+    problems, skips = gate.exec_position_problems(spec, "pins.json"), []
     for p in pins:
         probs, sks = _pin_problems(p, root, run)
         problems += probs
@@ -187,30 +177,19 @@ def check(spec, run=_run, root=None):
 
 
 def main(argv):
-    spec_path, explicit = resolve_spec(argv, os.environ.get("REFLECT_PINS", ""))
-    path = gate.repo_path(spec_path)
-    if not os.path.isfile(path):
-        if explicit:
-            return fatal(M("pins.explicit_spec_missing", name=spec_path))
-        return off(M("pins.off", name=spec_path))
-    spec, err = load_spec(path)
-    if err:
-        return fatal(M("pins.spec_broken", name=spec_path, error=err))
-    problems, skips = check(spec)
-    for x in skips:
-        print(machine().emit("skip", str(x)), file=sys.stderr)
-    return finish(M("pins.title"), problems,
-                  M("pins.ok", count=len(spec.get("pins") or [])))
+    return gate.run_spec_gate(
+        argv, "REFLECT_PINS",
+        off_msg=lambda n: M("pins.off", name=n),
+        missing_msg=lambda n: M("pins.explicit_spec_missing", name=n),
+        broken_msg=lambda n, err: M("pins.spec_broken", name=n, error=err),
+        title=M("pins.title"),
+        judge=check,
+        ok_msg=lambda spec: M("pins.ok", count=len(spec.get("pins") or [])),
+    )
 
 
 def _fixture():
-    """A real git fixture repo plus specs of each shape. Returns a dict.
-
-    Warning: this block (eight spec literals + repo building) used to live
-    directly inside `_cases()`, interleaved with the assertions -- half of the
-    70 lines were fixture. Separated, "which spec exercises which criterion"
-    is visible at a glance.
-    """
+    """Git worktree fixture and specs for `_cases()`."""
     import atexit  # noqa: PLC0415
     import shutil  # noqa: PLC0415
     import tempfile  # noqa: PLC0415
@@ -226,8 +205,6 @@ def _fixture():
         ["git", "-C", os.path.join(d, "wt"), "rev-parse", "HEAD"],
         capture_output=True, text=True,
                            encoding="utf-8", errors="replace").stdout.strip()
-    # The worktree uses an **absolute path** (the engine resolves against the
-    # repo root / abs; the fixture tree lives in a temp dir)
     wt = os.path.join(d, "wt")
     stamp = "echo octave wasm/11.3.0 %s 0"
     return {
@@ -258,9 +235,9 @@ def _cases():
     d = fx["d"]
     return [
         ("pins.resolve_spec",
-         lambda: resolve_spec(["--spec", "x.json"], "K.json") == ("x.json", True)
-         and resolve_spec([], "K.json") == ("K.json", True)
-         and resolve_spec([], "") == ("pins.json", False)),
+         lambda: gate.resolve_spec(["--spec", "x.json"], "K.json", "pins.json") == ("x.json", True)
+         and gate.resolve_spec([], "K.json", "pins.json") == ("K.json", True)
+         and gate.resolve_spec([], "", "pins.json") == ("pins.json", False)),
         # (1) compliant input: nothing reported
         ("pins.ok", lambda: check(fx["ok"], run=_run, root=d) == ([], [])),
         # (2) what must be reported is reported
@@ -274,8 +251,11 @@ def _cases():
          lambda: [p.code for p in check(fx["version_drift"], run=_run,
                                         root=d)[0]] == ["pins.version_drift"]),
         ("\u2605 pins.stamp_unreadable",
-         lambda: [p.code for p in check(fx["skip"], run=_run, root=d)[1]]
+         lambda: [p.code for p in check(fx["skip"], run=_run, root=d)[0]]
          == ["pins.stamp_unreadable"]),
+        ("\u2605 pins.optional_forbidden",
+         lambda: "gate.optional_forbidden" in [p.code for p in check(
+             {"pins": [{**fx["skip"]["pins"][0], "optional": True}]}, run=_run, root=d)[0]]),
         ("\u2605 pins.worktree_missing",
          lambda: [p.code for p in check(
              {"pins": [{"name": "x", "kind": "tree", "worktree": "nope",

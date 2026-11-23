@@ -1,0 +1,41 @@
+\documentclass[border=14pt]{standalone}
+\usepackage{ctex}
+\usepackage{tikz}
+\begin{document}
+\begin{tikzpicture}[x=1cm, y=1cm, font=\normalsize, line width=0.8pt]
+
+% fig-ge-06 三次谐波为什么同相位（中文）
+% 上行：基波——三支互差 120°
+% 下行：三次谐波——3x120 = 360，回到同向，三支全部同向
+% 底部一行说明：于是三次谐波属零序，零序通路决定它流不流
+
+\def\R{1.5}
+
+% ── 上行：基波 ──
+\begin{scope}[shift={(0,4.2)}]
+  \node[anchor=south west, font=\small] at (-0.2,1.9) {基波：互差 120°};
+  \coordinate (O) at (1.9,0);
+  \draw[->] (O) -- ++(90:\R)   node[anchor=south east, font=\small] {A};
+  \draw[->] (O) -- ++(-30:\R)  node[anchor=north west, font=\small] {B};
+  \draw[->] (O) -- ++(210:\R)  node[anchor=north east, font=\small] {C};
+  \node[anchor=west, font=\small, align=left] at (4.2,0.6)
+    {1 x 120° = 120°\\三支彼此错开};
+\end{scope}
+
+% ── 下行：三次谐波 ──
+\begin{scope}[shift={(0,0)}]
+  \node[anchor=south west, font=\small] at (-0.2,1.9) {三次谐波：全部同向};
+  % 三支同向（向上），横向错开
+  \draw[->, line width=1pt] (1.6,0) -- ++(90:\R) node[anchor=south east, font=\small] {A};
+  \draw[->, line width=1pt] (1.9,0) -- ++(90:\R) node[anchor=south, font=\small] {B};
+  \draw[->, line width=1pt] (2.2,0) -- ++(90:\R) node[anchor=south west, font=\small] {C};
+  \node[anchor=west, font=\small, align=left] at (4.2,0.6)
+    {3 x 120° = 360°\\回到同向，三支重合相干};
+\end{scope}
+
+% ── 底部说明 ──
+\node[anchor=north west, font=\small, align=left] at (-0.2,-1.0)
+  {所以三次谐波属于零序分量；\\零序通路（如中性线、三角形接法）决定它流不流。};
+
+\end{tikzpicture}
+\end{document}

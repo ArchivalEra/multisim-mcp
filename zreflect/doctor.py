@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Start-of-work preflight doctor (**small plugin**, issue #10): process / port liveness.
 
-"All file invariants green" ≠ "the environment is still alive" — two real
+"All file invariants green" != "the environment is still alive" -- two real
 incidents (Octave-Full-Wasm HISTORY §5.86 / §5.83): after a machine reboot
 the acceptance site and the build container both vanished; every file-level
 invariant held true, but the acceptance baseline was unusable, and a whole
 round was wasted before anyone noticed; in another repo a dev server had
-taken the experiment port, the probe connected to someone else's page ⇒
+taken the experiment port, the probe connected to someone else's page =>
 misjudged as "the new build won't come up". git, gates, and witnesses all
 govern files and artifacts; service processes, container state, and port
-occupancy fall under no mechanism — this plugin fills that gap: roll call
+occupancy fall under no mechanism -- this plugin fills that gap: roll call
 **before work starts**.
 
 Policy is **data** (same pattern as #7); the mechanism provides only the
@@ -18,12 +18,9 @@ engine + contract:
     { "checks": [
       { "kind": "http", "url": "http://127.0.0.1:8761/",
         "expect_status": 200,
-        "expect_headers": {"Cross-Origin-Opener-Policy": "same-origin"},
-        "why": "acceptance baseline: must be alive and carry the COI header" },
-      { "kind": "docker", "container": "o113",
-        "state": "running", "why": "build lane" },
-      { "kind": "port-free", "port": 8868,
-        "why": "experiment-exclusive port — occupied ⇒ probe misjudges" } ] }
+        "expect_headers": {"Cross-Origin-Opener-Policy": "same-origin"} },
+      { "kind": "docker", "container": "o113", "state": "running" },
+      { "kind": "port-free", "port": 8868 } ] }
 
 Both kinds of assertion are needed: "must be alive" (http / docker) and
 "must be free" (port-free). Output obeys the **stdout bare-value contract**:
@@ -32,22 +29,22 @@ Everything is **harmless**: read-only GET / `docker inspect` / connect probe.
 
 **Every probe must carry a timeout** (`REFLECT_DOCTOR_TIMEOUT`,
 default 2 seconds): connect against a dead port waits until the end of
-time — that is the probe's own failure mode and must be decoupled from
+time -- that is the probe's own failure mode and must be decoupled from
 the thing being probed (the same lesson as "probes stay off the boot path").
 
 **Not wired into pre-commit** (the issue says so): it checks **things that
 die**, the wrong frequency for a commit hook, and it would slow every
-commit. So this file is **not** a `check_*.py` — the discovery roster
+commit. So this file is **not** a `check_*.py` -- the discovery roster
 (`for g in zreflect/check_*.py`) never scans it, and pre-commit doesn't
 run it; `gates-selftest.sh` names it once to prove it can go red (same
 plugin pattern as einfacht-env.sh). Run by hand before work starts:
 
     python3 zreflect/doctor.py
 
-Pluggable: `REFLECT_DOCTOR` unset and the default `doctor.json` absent ⇒
+Pluggable: `REFLECT_DOCTOR` unset and the default `doctor.json` absent =>
 state plainly that it is off, return 0. Explicitly configured but pointing
-at a missing file ⇒ FATAL, exit 2 (a dangling pointer is not "disabled").
-Liveness is a transient fact ⇒ **not entered into the ledger replay**
+at a missing file => FATAL, exit 2 (a dangling pointer is not "disabled").
+Liveness is a transient fact => **not entered into the ledger replay**
 (running it fresh at each start of work is enough; the ledger's bare-value
 contract can't hold things that die).
 
@@ -55,13 +52,13 @@ contract can't hold things that die).
 probing, no content validation (content is governed by existing gates /
 acceptance); "which services must be alive, which ports must be exclusive"
 is **policy**, configured per repo (spec data). Zero-value guards: empty
-list / missing kind / missing why / unknown kind ⇒ all reported (an unknown
+list / missing kind / unknown kind => all reported (an unknown
 criterion = silent pass).
 
 Usage (run directly, cwd=repo root):
     python3 zreflect/doctor.py [--selftest]
 Exit codes: 0=all alive (or disabled) / 1=some DOWN / 2=configuration or
-environment broken (a malformed spec shape ≠ a failed check).
+environment broken (a malformed spec shape != a failed check).
 """
 from __future__ import annotations
 
@@ -72,18 +69,22 @@ import sys
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gate  # noqa: E402
+import i18n  # noqa: E402
 import knobs  # noqa: E402
-import machine  # noqa: E402
-from gate import fatal, load_spec, main_selftest_or, meta, off, repo  # noqa: E402
+from gate import fatal, main_selftest_or, meta  # noqa: E402
 from i18n import M  # noqa: E402
 
-# Derived from the knob registry (single source of truth) — a handwritten
+# Derived from the knob registry (single source of truth) -- a handwritten
 # literal would drift from it (the most expensive kind of debt in this repo).
+# DEFAULT_TIMEOUT used to be a bare `2.0` on the next line after this very
+# comment -- the second origin of `REGISTRY["REFLECT_DOCTOR_TIMEOUT"]`'s
+# default ("2"), contradicting its own rationale on the spot.
 DEFAULT_SPEC = knobs.REGISTRY["REFLECT_DOCTOR"][1]
-DEFAULT_TIMEOUT = 2.0
+DEFAULT_TIMEOUT = float(knobs.REGISTRY["REFLECT_DOCTOR_TIMEOUT"][1])
 
 
-# —— Pure criteria (selftest can inject fake responses; return (satisfied?, reason)) ——
+# ---- Pure criteria (selftest can inject fake responses; return (satisfied?, reason)) ----
 
 def _http_verdict(status, headers, check):
     """Does the HTTP response satisfy the criteria. Header keys are lowercased."""
@@ -110,17 +111,27 @@ def _port_free_verdict(connect_succeeded):
             "" if not connect_succeeded else M("doctor.port_in_use"))
 
 
-# —— Real transports (thin layer; the selftest never runs them, the selftest must be network- and docker-free) ——
+# ---- Real transports (thin layer; the selftest never runs them, the selftest must be network- and docker-free) ----
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
 
 def _http_probe(check, timeout):
+    opener = urllib.request.build_opener(_NoRedirect)
     try:
         req = urllib.request.Request(check["url"], method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            ok, why = _http_verdict(
+        with opener.open(req, timeout=timeout) as resp:
+            return _http_verdict(
                 resp.status,
                 {k.lower(): v for k, v in resp.headers.items()},
                 check)
-            return ok, why
+    except urllib.error.HTTPError as e:
+        return _http_verdict(
+            e.code,
+            {k.lower(): v for k, v in (e.headers.items() if e.headers else ())},
+            check)
     # URLError is a subclass of OSError; no need to list it separately.
     except (OSError, ValueError) as e:
         return False, M("doctor.get_failed", error=e)
@@ -138,15 +149,37 @@ def _docker_probe(check, timeout):
     return _docker_verdict(r.stdout)
 
 
-def _port_free_probe(check, timeout):
+def _can_bind_exclusive(host, port):
+    if os.name != "nt":
+        return False
+    fam = socket.AF_INET6 if ":" in host else socket.AF_INET
     try:
-        socket.create_connection(("127.0.0.1", check["port"]),
-                                 timeout=timeout).close()
-    except ConnectionRefusedError:
-        return True, ""                       # connection refused = free
-    except OSError as e:
-        return False, M("doctor.probe_inconclusive", error=e)
-    return _port_free_verdict(True)
+        with socket.socket(fam, socket.SOCK_STREAM) as s:
+            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            s.bind((host, port))
+        return True
+    except OSError:
+        return False
+
+
+def _port_free_probe(check, timeout):
+    last_err: OSError | None = None
+    for host in ("127.0.0.1", "::1"):
+        try:
+            socket.create_connection((host, check["port"]), timeout=timeout).close()
+            return _port_free_verdict(True)
+        except ConnectionRefusedError:
+            continue
+        except TimeoutError as e:
+            if _can_bind_exclusive(host, check["port"]):
+                continue
+            last_err = e
+        except OSError as e:
+            last_err = e
+    if last_err is not None:
+        return False, M("doctor.probe_inconclusive", error=last_err)
+    return True, ""
 
 
 _PROBES = {"http": _http_probe, "docker": _docker_probe,
@@ -154,18 +187,18 @@ _PROBES = {"http": _http_probe, "docker": _docker_probe,
 
 
 def label(check):
-    """Label used to name a DOWN line: kind:target."""
+    """Label for a DOWN line: kind:target."""
     target = check.get("url") or check.get("container") \
         or check.get("port")
     return "%s:%s" % (check.get("kind"), target)
 
 
-# —— Spec validation (pure functions: zero-value guards + shape criteria) ——
+# ---- Spec validation (pure functions: zero-value guards + shape criteria) ----
 
 def _http_shape_problems(c):
-    """Field criteria for an http check (missing url / non-int expect_status / expect_headers shape)."""
-    out = []
-    if not str(c.get("url") or "").strip():
+    """Field criteria for an http check (missing/bad-scheme url / non-int expect_status / expect_headers shape)."""
+    url = str(c.get("url") or "").strip()
+    if not url or not url.startswith(("http://", "https://")):
         return [M("doctor.http_missing_url", check=label(c))]
     es = c.get("expect_status")
     if es is not None and (isinstance(es, bool) or not isinstance(es, int)):
@@ -175,7 +208,7 @@ def _http_shape_problems(c):
             not isinstance(k, str) or not isinstance(v, str)
             for k, v in eh.items())):
         return [M("doctor.http_headers_not_object", check=label(c))]
-    return out
+    return []
 
 
 def _docker_shape_problems(c):
@@ -208,7 +241,7 @@ _KIND_SHAPE = {
 def spec_problems(checks):
     """Pure function: list of spec-shape problems (empty = shape is valid).
 
-    issue #22 remediation: split along "one layer of criteria = one function" —
+    issue #22 remediation: split along "one layer of criteria = one function" --
     each kind's field criteria became its own function (one `_KIND_SHAPE` table),
     the main function does only the generic parts (non-object / missing kind /
     unknown kind / missing why) + dispatch. Message wording and order preserved.
@@ -221,7 +254,7 @@ def spec_problems(checks):
             out.append(M("doctor.not_object", check=c))
             continue
         kind = str(c.get("kind") or "").strip()
-        why = str(c.get("why") or "").strip()
+
         if not kind:
             out.append(M("doctor.missing_kind", check=c))
             continue
@@ -229,28 +262,23 @@ def spec_problems(checks):
             out.append(M("doctor.unknown_kind",
                          kind=kind, supported=", ".join(sorted(_PROBES))))
             continue
-        if not why:
-            out.append(M("doctor.missing_why", check=label(c)))
         out += _KIND_SHAPE[kind](c)
     return out
 
 
-# —— Orchestration (probe injectable: selftest uses fake probes, no network / docker) ——
+# ---- Orchestration (probe injectable: selftest uses fake probes, no network / docker) ----
 
 def _timeout():
-    raw = os.environ.get("REFLECT_DOCTOR_TIMEOUT", "").strip()
+    """Positive timeout seconds; `_timeout_problem()` validates before probing."""
+    raw = (knobs.raw("REFLECT_DOCTOR_TIMEOUT") or "").strip()
     if not raw:
         return DEFAULT_TIMEOUT
-    try:
-        t = float(raw)
-    except ValueError:
-        return DEFAULT_TIMEOUT
-    return t if t > 0 else DEFAULT_TIMEOUT
+    return float(raw)
 
 
 def down_labels(checks, probe=None, timeout=None):
     """Returns the list of DOWN labels (empty = all alive). Every probe carries
-    a timeout (timeout=None ⇒ read the knob / default)."""
+    a timeout (timeout=None => read the knob / default)."""
     probe = probe or _dispatch
     t = _timeout() if timeout is None else timeout
     downs = []
@@ -265,58 +293,30 @@ def _dispatch(check, timeout):
     return _PROBES[check["kind"]](check, timeout)
 
 
-# —— Entry ——
-
-def _spec_path():
-    """Resolution order: explicit knob > default name. Explicitly configured
-    but pointing at a missing file ⇒ return that path (run FATALs on the
-    spot); unset and the default name absent ⇒ None (disabled)."""
-    name = os.environ.get("REFLECT_DOCTOR", "").strip()
-    if name:
-        return repo(name)
-    p = repo(DEFAULT_SPEC)
-    return p if os.path.exists(p) else None
-
+# ---- Entry ----
 
 def _timeout_problem():
     """`REFLECT_DOCTOR_TIMEOUT` must be a positive number. Returns a problem or None."""
-    raw = os.environ.get("REFLECT_DOCTOR_TIMEOUT", "").strip()
+    raw = (knobs.raw("REFLECT_DOCTOR_TIMEOUT") or "").strip()
     if not raw:
         return None
     try:
         value = float(raw)
     except ValueError:
         return M("doctor.bad_timeout", value=raw)
-    # Range checked explicitly; no `raise ValueError` as control flow (`float()`
-    # already handles "not a number"; this is only "a number but not positive" —
-    # an independent failure cause that shouldn't borrow the exception channel)
     if value <= 0:
         return M("doctor.bad_timeout", value=raw)
     return None
 
 
-def _load_checks():
-    """Load the spec and take `checks`. Returns `(checks, done_rc)`.
-
-    `done_rc is not None` ⇒ the caller **must return it directly** (it may be 0;
-    `off` is 0). `None` ⇒ keep judging below.
-
-    ⚠️ "rc non-zero" must not be used here as the "already handled" signal:
-    `off()`'s rc is **0** (off is not a failure). When this was written as
-    `if rc: return rc`, execution kept going after `off` and ran
-    `spec_problems(None)` anyway, turning "disabled" into `doctor.empty_spec`
-    + rc=2 (observed: doctor went red on every cross-repo fixture run).
-    """
-    p = _spec_path()
-    if p is None:
-        return None, off(M("doctor.off", name=DEFAULT_SPEC,
-                           path=os.path.join("zreflect", DEFAULT_SPEC)
-                           + ".example"))
-    if not os.path.exists(p):
-        return None, fatal(M("doctor.spec_missing"))
-    spec, err = load_spec(p)
-    if err:
-        return None, fatal(err)
+def _load_checks(argv):
+    spec, _name, rc = gate.load_gate_spec(
+        argv, "REFLECT_DOCTOR",
+        off_msg=lambda n: M("doctor.off", name=n or DEFAULT_SPEC),
+        missing_msg=lambda _n: M("doctor.spec_missing"),
+    )
+    if rc is not None:
+        return None, rc
     return (spec.get("checks") if isinstance(spec, dict) else None), None
 
 
@@ -325,7 +325,7 @@ def run(argv=None):
     bad = _timeout_problem()
     if bad:
         return fatal(bad)
-    checks, done_rc = _load_checks()
+    checks, done_rc = _load_checks(argv)
     if done_rc is not None:
         return done_rc
     probs = spec_problems(checks)
@@ -336,7 +336,7 @@ def run(argv=None):
         return 2
     downs = down_labels(checks)
     if downs:
-        print(machine().emit("down", ", ".join(downs)))
+        print(i18n.emit("down", ", ".join(downs)))
         return 1
     print("ok")
     return 0
@@ -393,10 +393,7 @@ def _cases_spec(fx):
               ] == ["doctor.missing_kind"]),
     ("★ doctor.unknown_kind",
      lambda: [p.code for p in spec_problems(
-         [{"kind": "smtp", "why": "w"}])] == ["doctor.unknown_kind"]),
-    ("★ doctor.missing_why",
-     lambda: [p.code for p in spec_problems(
-         [{"kind": "http", "url": "http://x/"}])] == ["doctor.missing_why"]),
+         [{"kind": "smtp"}])] == ["doctor.unknown_kind"]),
     # (3) empty input must be reported
     ("★ doctor.empty_spec_none",
      lambda: [p.code for p in spec_problems(None)] == ["doctor.empty_spec"]),
@@ -426,16 +423,16 @@ def _cases_http(fx):
          good[0])[0] is False),
     ("★ doctor.http_missing_url",
      lambda: [p.code for p in spec_problems(
-         [{"kind": "http", "why": "w"}])] == ["doctor.http_missing_url"]),
+         [{"kind": "http"}])] == ["doctor.http_missing_url"]),
     ("★ doctor.http_status_not_int",
      lambda: [p.code for p in spec_problems(
          [{"kind": "http", "url": "http://x/",
-           "expect_status": "200", "why": "w"}])
+           "expect_status": "200"}])
          ] == ["doctor.http_status_not_int"]),
     ("★ doctor.http_headers_not_object",
      lambda: [p.code for p in spec_problems(
          [{"kind": "http", "url": "http://x/",
-           "expect_headers": ["a"], "why": "w"}])
+           "expect_headers": ["a"]}])
          ] == ["doctor.http_headers_not_object"]),
     ]
 
@@ -452,10 +449,10 @@ def _cases_docker(fx):
     ("★ doctor.docker_bad_state",
      lambda: [p.code for p in spec_problems(
          [{"kind": "docker", "container": "c",
-           "state": "paused", "why": "w"}])] == ["doctor.docker_bad_state"]),
+           "state": "paused"}])] == ["doctor.docker_bad_state"]),
     ("★ doctor.docker_missing_container",
      lambda: [p.code for p in spec_problems(
-         [{"kind": "docker", "state": "running", "why": "w"}])
+         [{"kind": "docker", "state": "running"}])
          ] == ["doctor.docker_missing_container"]),
     ]
 
@@ -483,7 +480,7 @@ def _cases_misc(fx):
     return [
     ("★ doctor.down_label_names_the_target",
      # Pin only what the **case name claims** (label names the target); `detail`
-     # is a pass-through from the fixture probe — pinning the whole dict would
+     # is a pass-through from the fixture probe -- pinning the whole dict would
      # make this assertion go red whenever the fixture's wording changes.
      lambda: [p.code for p in down_labels([good[1]], probe=down_probe)
               ] == ["doctor.down_label"]
@@ -495,7 +492,7 @@ def _cases_misc(fx):
 
 
 def _cases():
-    """Assemble the five groups of fixture assertions. **Assemble only** — the criteria live in the group functions."""
+    """Assemble the five groups of fixture assertions. **Assemble only** -- the criteria live in the group functions."""
     fx = _cases_fixture()
     return (
     _cases_spec(fx)
@@ -507,12 +504,12 @@ def _cases():
 
 
 GATE = meta("start-of-work doctor",
-            "process / port liveness (probes things that can die ⇒ "
+            "process / port liveness (probes things that can die => "
             "runs_at=start-of-work, not in pre-commit)",
             knobs=("REFLECT_DOCTOR", "REFLECT_DOCTOR_TIMEOUT"),
             runs_at="start-of-work",
             off_reason="this repo has no doctor.json spec: no process/port "
-                       "liveness is checked ⇒ state it is off")
+                       "liveness is checked => state it is off")
 
 if __name__ == "__main__":
     sys.exit(main_selftest_or(sys.argv[1:],

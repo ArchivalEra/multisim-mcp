@@ -71,3 +71,9 @@ multisim-mcp-jobs/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Figure build artifacts (figures-src/build.sh keeps logs next to sources)
+deliverables/figures-src/*.aux
+deliverables/figures-src/*.log
+deliverables/figures-src/*.pdf
+deliverables/figures-src/*.build.log

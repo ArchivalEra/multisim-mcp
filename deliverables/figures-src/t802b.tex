@@ -1,0 +1,47 @@
+\documentclass[border=10pt]{standalone}
+\usepackage{tikz}
+\begin{document}
+\begin{tikzpicture}[x=1cm, y=1cm, font=\normalsize, line width=0.8pt]
+  % 图 8.02（三行）：40 格，每格 0.35 cm，总宽 14.0 cm；高电平 0.6 cm。
+  % 百分比 -> 格：5->2, 10->4, 15->6, 25->10, 30->12, 40->16, 50->20,
+  %   60->24, 70->28, 80->32, 90->36, 95->38
+  \def\seg{0.35}
+  \def\hi{0.6}
+
+  % CP：低 0-4 | 高 4-10 | 低 10-12 | 高 12-16 | 低 16-20
+  %   | 高 20-24 | 低 24-28 | 高 28-32 | 低 32-40
+  \begin{scope}[yshift=0cm]
+    \node[anchor=east] at (-0.3,\hi/2) {CP};
+    \draw (0,0) -- (4*\seg,0);
+    \draw (4*\seg,0) -- (4*\seg,\hi) -- (10*\seg,\hi);
+    \draw (10*\seg,\hi) -- (10*\seg,0) -- (12*\seg,0);
+    \draw (12*\seg,0) -- (12*\seg,\hi) -- (16*\seg,\hi);
+    \draw (16*\seg,\hi) -- (16*\seg,0) -- (20*\seg,0);
+    \draw (20*\seg,0) -- (20*\seg,\hi) -- (24*\seg,\hi);
+    \draw (24*\seg,\hi) -- (24*\seg,0) -- (28*\seg,0);
+    \draw (28*\seg,0) -- (28*\seg,\hi) -- (32*\seg,\hi);
+    \draw (32*\seg,\hi) -- (32*\seg,0) -- (40*\seg,0);
+  \end{scope}
+
+  % S：低 0-12 | 高 12-20 | 低 20-28 | 高 28-36 | 低 36-40
+  \begin{scope}[yshift=-1.6cm]
+    \node[anchor=east] at (-0.3,\hi/2) {S};
+    \draw (0,0) -- (12*\seg,0);
+    \draw (12*\seg,0) -- (12*\seg,\hi) -- (20*\seg,\hi);
+    \draw (20*\seg,\hi) -- (20*\seg,0) -- (28*\seg,0);
+    \draw (28*\seg,0) -- (28*\seg,\hi) -- (36*\seg,\hi);
+    \draw (36*\seg,\hi) -- (36*\seg,0) -- (40*\seg,0);
+  \end{scope}
+
+  % R：低 0-2 | 高 2-6 | 低 6-24 | 高 24-28 | 低 28-38 | 高 38-40（95% 起恒高）
+  \begin{scope}[yshift=-3.2cm]
+    \node[anchor=east] at (-0.3,\hi/2) {R};
+    \draw (0,0) -- (2*\seg,0);
+    \draw (2*\seg,0) -- (2*\seg,\hi) -- (6*\seg,\hi);
+    \draw (6*\seg,\hi) -- (6*\seg,0) -- (24*\seg,0);
+    \draw (24*\seg,0) -- (24*\seg,\hi) -- (28*\seg,\hi);
+    \draw (28*\seg,\hi) -- (28*\seg,0) -- (38*\seg,0);
+    \draw (38*\seg,0) -- (38*\seg,\hi) -- (40*\seg,\hi);
+  \end{scope}
+\end{tikzpicture}
+\end{document}

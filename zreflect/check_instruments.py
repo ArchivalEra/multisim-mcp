@@ -24,7 +24,7 @@ go red). Enabling (each part independent):
     read, say so; guessing is not allowed).
 
   - `REFLECT_INSTRUMENTS=instruments.json` -- **the method registry**
-    (schema: `{"methods": [{text, why, fixed_in}]}`): falsified **measuring
+    (schema: `{"methods": [{text, fixed_in}]}`): falsified **measuring
     methods** get a registration slot, the way `retractions.json` handles
     "retracted assertions"; any ledger `cmd` containing a falsified snippet =>
     report (a broken measuring method must not stay in the ledger). Knob set
@@ -45,29 +45,31 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gate import (  # noqa: E402
-    fatal,
-    finish,
-    load_spec,
-    main_selftest_or,
-    meta,
-    off,
-    repo,  # noqa: E402
-)
+import gate  # noqa: E402
+import knobs  # noqa: E402
+from facts import facts_of, load_or_fatal  # noqa: E402
+from gate import fatal, finish, main_selftest_or, meta, off, repo  # noqa: E402
 from i18n import M  # noqa: E402
-from ledger import facts_of, load_or_fatal  # noqa: E402
 
-INSTRUMENTS_RAW = os.environ.get("REFLECT_INSTRUMENTS", "").strip()
-DAYS_RAW = os.environ.get("REFLECT_INSTRUMENT_DAYS", "").strip()
+
+def _instruments_raw():
+    return (knobs.raw("REFLECT_INSTRUMENTS") or "").strip()
+
+
+def _days_raw():
+    return (knobs.raw("REFLECT_INSTRUMENT_DAYS") or "").strip()
 
 
 def _days():
-    if not DAYS_RAW:
+    import math  # noqa: PLC0415
+    raw = _days_raw()
+    if not raw:
         return None
     try:
-        return float(DAYS_RAW)
+        v = float(raw)
     except ValueError:
         return None
+    return v if (math.isfinite(v) and v >= 0) else None
 
 
 def _age_days(first_seen):
@@ -89,7 +91,9 @@ def _constant_return_problems(f, days):
         entry = f[k] if isinstance(f[k], dict) else {"value": f[k]}
         fs = entry.get("first_seen")
         if not fs:
-            continue                  # old ledger entries have no first_seen: do not guess, do not report
+            out.append(M("instruments.first_seen_unparseable",
+                         key=k, first_seen=fs))
+            continue
         age = _age_days(fs)
         if age is None:
             out.append(M("instruments.first_seen_unparseable",
@@ -100,15 +104,17 @@ def _constant_return_problems(f, days):
     return out
 
 
-def _falsified_hits(text, why, fixed, f):
-    """The ledger keys hit by one falsified snippet (a hit = that fact still
-    uses the broken measuring method)."""
+def _falsified_hits(text, fixed, f):
+    """The ledger keys hit by one falsified snippet (whitespace-normalized)."""
+    import re  # noqa: PLC0415
     hits = []
+    ntext = re.sub(r"\s+", " ", text).strip()
     for k in sorted(f):
         entry = f[k] if isinstance(f[k], dict) else {"value": f[k]}
-        if text in str(entry.get("cmd") or ""):
+        ncmd = re.sub(r"\s+", " ", str(entry.get("cmd") or "")).strip()
+        if ntext in ncmd:
             hits.append(M("instruments.falsified_method", key=k, text=text,
-                          why=why, fixed_in=fixed))
+                          fixed_in=fixed))
     return hits
 
 
@@ -118,12 +124,11 @@ def _falsified_method_problems(f, methods):
     out = []
     for m in (methods or []):
         text = str(m.get("text") or "").strip()
-        why = str(m.get("why") or "").strip()
-        if not text or not why:
+        if not text:
             out.append(M("instruments.entry_malformed", entry=m))
             continue
         fixed = m.get("fixed_in") or M("instruments.fixed_in_unregistered")
-        out += _falsified_hits(text, why, fixed, f)
+        out += _falsified_hits(text, fixed, f)
     return out
 
 
@@ -147,37 +152,37 @@ def problems(ledger, methods=None, days=None):
     return out
 
 
-def _load_methods(name):
-    """Read the method registry (the JSON `REFLECT_INSTRUMENTS` points at).
-    Returns `(methods, rc)`."""
-    if not name:
-        return [], 0
-    reg_path = repo(name)
-    if not os.path.exists(reg_path):
-        return [], fatal(M("instruments.registry_missing", name=name))
-    reg, err = load_spec(reg_path)
-    if err:
-        return [], fatal(M("instruments.spec_broken", name=name, error=err))
-    return reg.get("methods") or [], 0
-
-
 def run(argv=None):
-    argv = list(sys.argv[1:] if argv is None else argv)
-    name = INSTRUMENTS_RAW
-    days = _days()
-    if DAYS_RAW and days is None:
+    _ = argv
+    name = _instruments_raw()
+    days_raw, days = _days_raw(), _days()
+    if days_raw and days is None:
         return fatal(M("instruments.days_unparseable",
-                       days_knob="REFLECT_INSTRUMENT_DAYS", value=DAYS_RAW))
+                       days_knob="REFLECT_INSTRUMENT_DAYS", value=days_raw))
     if not name and days is None:
         return off(M("instruments.off",
                      days_knob="REFLECT_INSTRUMENT_DAYS",
                      instruments_knob="REFLECT_INSTRUMENTS"))
-    led_path = repo(os.environ.get("REFLECT_FACTS", "FACTS.json"))
+    led_path = repo(knobs.get("REFLECT_FACTS"))
     if not os.path.exists(led_path):
         return fatal(M("instruments.ledger_missing", path=led_path))
-    methods, rc = _load_methods(name)
-    if rc:
-        return rc
+    methods: list[dict[str, object]] = []
+    if name:
+        reg, _n, rc = gate.load_gate_spec(
+            [], "REFLECT_INSTRUMENTS",
+            off_msg=lambda _k: M("instruments.off", days_knob="REFLECT_INSTRUMENT_DAYS",
+                                 instruments_knob="REFLECT_INSTRUMENTS"),
+            missing_msg=lambda k: M("instruments.registry_missing", name=k),
+            broken_msg=lambda k, err: M("instruments.spec_broken", name=k, error=err),
+        )
+        if rc is not None:
+            return rc
+        if not isinstance(reg, dict):
+            return fatal(M("instruments.spec_broken", name=name, error="spec must be an object"))
+        raw_methods = reg.get("methods")
+        if not isinstance(raw_methods, list) or not raw_methods:
+            return fatal(M("instruments.empty_registry", name=name))
+        methods = raw_methods
     probs = problems(load_or_fatal(led_path), methods=methods, days=days)
     return finish(M("instruments.title"), probs, _ok_line(name, methods, days))
 
@@ -218,9 +223,9 @@ def _cases():
          lambda: problems(led, days=30) == []),
         ("instruments.registered_method_absent",
          lambda: problems(led, methods=methods, days=30) == []),
-        ("instruments.first_seen_absent",
-         lambda: problems({"facts": {"n": {"value": 1, "cmd": "c"}}},
-                          days=30) == []),
+        ("★ instruments.first_seen_missing",
+         lambda: [p.code for p in problems({"facts": {"n": {"value": 1, "cmd": "c"}}}, days=30)]
+         == ["instruments.first_seen_unparseable"]),
         # (2) what must be reported is reported
         ("★ instruments.constant_return",
          lambda: [p.code for p in problems(led_old, days=30)]
@@ -231,8 +236,10 @@ def _cases():
         ("★ instruments.falsified_method",
          lambda: [p.code for p in problems(led_method, methods=methods)]
          == ["instruments.falsified_method"]),
+        # the only required field now: a registry entry with no snippet cannot
+        # match anything, so it would silently enrol nothing
         ("★ instruments.entry_malformed",
-         lambda: [p.code for p in problems(led, methods=[{"text": "x"}])]
+         lambda: [p.code for p in problems(led, methods=[{"fixed_in": "y"}])]
          == ["instruments.entry_malformed"]),
         # (3) empty input must be reported
         ("★ instruments.ledger_empty",

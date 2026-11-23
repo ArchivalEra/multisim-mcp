@@ -1,0 +1,51 @@
+\documentclass[border=14pt]{standalone}
+\usepackage{ctex}
+\usepackage{tikz}
+\begin{document}
+\begin{tikzpicture}[x=1cm, y=1cm, font=\normalsize, line width=0.8pt]
+
+% fig-ge-05 三相对称分量的三张脸（中文）
+% 三子图并排：正序（A→B→C 逆时针 120°）、负序（反向）、零序（三支同向重合）
+% 禁令②：零序必须一眼看出「三支同向」——画三支平行略错开并注明同相位
+
+\def\R{1.5}
+\def\cw{4.4}
+\def\gap{1.2}
+
+% ── 1 正序 ──
+\begin{scope}[shift={(0,0)}]
+  \node[anchor=south] at ({\cw/2},3.8) {正序};
+  \coordinate (O) at ({\cw/2},1.6);
+  \draw[->] (O) -- ++(90:\R)   node[anchor=south east, font=\small] {A};
+  \draw[->] (O) -- ++(-30:\R)  node[anchor=north west, font=\small] {B};
+  \draw[->] (O) -- ++(210:\R)  node[anchor=north east, font=\small] {C};
+  \draw[->, line width=0.5pt, gray] (O) ++(90:0.5) arc (90:-30:0.5);
+  \node[anchor=north, font=\small, align=center] at ({\cw/2},-0.7) {A→B→C 顺时针 120°\\大小相等、互差 120°};
+\end{scope}
+
+% ── 2 负序 ──
+\begin{scope}[shift={(5.6,0)}]
+  \node[anchor=south] at ({\cw/2},3.8) {负序};
+  \coordinate (O) at ({\cw/2},1.6);
+  \draw[->] (O) -- ++(90:\R)   node[anchor=south east, font=\small] {A};
+  \draw[->] (O) -- ++(210:\R)  node[anchor=north east, font=\small] {B};
+  \draw[->] (O) -- ++(-30:\R)  node[anchor=north west, font=\small] {C};
+  \draw[->, line width=0.5pt, gray] (O) ++(90:0.5) arc (90:210:0.5);
+  \node[anchor=north, font=\small, align=center] at ({\cw/2},-0.7) {A→C→B 逆时针 120°\\大小相等、互差 120°};
+\end{scope}
+
+% ── 3 零序（三支同向，略错开画清）──
+\begin{scope}[shift={(11.2,0)}]
+  \node[anchor=south] at ({\cw/2},3.8) {零序};
+  % 三支同向（都向上），横向错开 0.22 以便看清是三支
+  \draw[->, line width=1pt] ({\cw/2-0.30},0.6) -- ++(90:\R)
+    node[anchor=south east, font=\small] {A};
+  \draw[->, line width=1pt] ({\cw/2},0.6) -- ++(90:\R)
+    node[anchor=south, font=\small] {B};
+  \draw[->, line width=1pt] ({\cw/2+0.30},0.6) -- ++(90:\R)
+    node[anchor=south west, font=\small] {C};
+  \node[anchor=north, font=\small, align=center] at ({\cw/2},-0.7) {三支同向、同相位\\大小相等};
+\end{scope}
+
+\end{tikzpicture}
+\end{document}

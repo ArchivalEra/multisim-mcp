@@ -1,0 +1,93 @@
+{
+  "id": "demo-7gate",
+  "title": "习题 7.14：三只非门 + 四只与非门实现 Y = A·D̄ + B̄·C·D̄ + B·C̄·D̄",
+  "inputs": {
+    "A": 1,
+    "B": 1,
+    "C": 0,
+    "D": 1
+  },
+  "gates": [
+    {
+      "id": "nB",
+      "type": "not",
+      "in": [
+        "B"
+      ],
+      "label": "1"
+    },
+    {
+      "id": "nC",
+      "type": "not",
+      "in": [
+        "C"
+      ],
+      "label": "1"
+    },
+    {
+      "id": "nD",
+      "type": "not",
+      "in": [
+        "D"
+      ],
+      "label": "1"
+    },
+    {
+      "id": "p1",
+      "type": "nand",
+      "in": [
+        "A",
+        "nD"
+      ],
+      "label": "&"
+    },
+    {
+      "id": "p2",
+      "type": "nand",
+      "in": [
+        "nB",
+        "C",
+        "nD"
+      ],
+      "label": "&"
+    },
+    {
+      "id": "p3",
+      "type": "nand",
+      "in": [
+        "B",
+        "nC",
+        "nD"
+      ],
+      "label": "&"
+    },
+    {
+      "id": "Y",
+      "type": "nand",
+      "in": [
+        "p1",
+        "p2",
+        "p3"
+      ],
+      "label": "&"
+    }
+  ],
+  "outputs": [
+    "Y",
+    "p1",
+    "p2",
+    "p3"
+  ],
+  "wireStyles": {
+    "nD": {
+      "color": "#1164a3",
+      "dash": "dashed"
+    },
+    "p1": {
+      "color": "#b3541e"
+    },
+    "p2": {
+      "dash": "dashed"
+    }
+  }
+}

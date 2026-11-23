@@ -1,0 +1,29 @@
+\documentclass[border=10pt]{standalone}
+\usepackage{tikz}
+\begin{document}
+\begin{tikzpicture}[x=1cm, y=1cm, font=\normalsize, line width=0.8pt]
+  % 图 8.01：R̄D 全程恒高一行；S̄D 四个低脉冲（0–5%, 20–40%, 50–70%, 85–100%）。
+  % 横轴 0–100%，总宽 11.2 cm，每 1% = 0.112 cm。
+  % 电平 0 -> y=0，1 -> y=0.75。
+  \def\pp{0.112}
+  \def\hi{0.75}
+  \def\total{11.2}
+
+  % R̄D：全程恒高
+  \begin{scope}[yshift=0cm]
+    \node[anchor=east] at (-0.3,\hi/2) {$\overline{R_D}$};
+    \draw (0,\hi) -- (\total,\hi);
+  \end{scope}
+
+  % S̄D：一条连续折线，低0-5/高5-20/低20-40/高40-50/低50-70/高70-85/低85-100
+  \begin{scope}[yshift=-1.9cm]
+    \node[anchor=east] at (-0.3,\hi/2) {$\overline{S_D}$};
+    \draw (0,0)
+      -- (5*\pp,0) -- (5*\pp,\hi) -- (20*\pp,\hi)
+      -- (20*\pp,0) -- (40*\pp,0) -- (40*\pp,\hi) -- (50*\pp,\hi)
+      -- (50*\pp,0) -- (70*\pp,0) -- (70*\pp,\hi) -- (85*\pp,\hi)
+      -- (85*\pp,0) -- (\total,0);
+  \end{scope}
+
+\end{tikzpicture}
+\end{document}

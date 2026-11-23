@@ -39,128 +39,149 @@ it. So CI (`.github/workflows/readme-sync.yml`) runs **the same criterion**:
 the local hook is the first pain, CI is the commitment's front line.
 """
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from gate import (  # noqa: E402
+    fatal,
     finish,
-    machine,  # noqa: E402
     main_selftest_or,
     meta,
+    off,
     repo,
 )
-from i18n import M  # noqa: E402
+from i18n import M, Message  # noqa: E402
 
 
 def lang_names():
     """The trilingual README list -- delegates to `knobs.readme_names()` (the
     single source of truth).
 
-    Warning: this used to do its own `os.environ.get("REFLECT_READMES",
-    READMES)` here: the **empty string did not fall back** --
-    `REFLECT_READMES=` (empty = unset) returned `()`, and the downstream
-    zero-value guard reported it as "judging the README group against an
-    empty list"; while `knobs.readme_names()` under the same environment
-    fell back to the registry correctly. Two criteria, forked empty-string
-    semantics (measured).
+    Empty `REFLECT_READMES` is a deliberate "no README group" and yields `()`;
+    unset yields the registry default. Both criteria here report an empty list.
     """
     import knobs  # noqa: PLC0415
     return tuple(knobs.readme_names())
 
 
-def problems_structure(files, langs):
-    """Structural criterion (pure function: the selftest depends on that).
-    `files` = {name: body (unreadable => no key for it)}."""
+def _structure_sig(body):
+    """Count top-level `#`, `##` headings and ``` fences for cross-language parity."""
+    return (
+        len(re.findall(r"^#\s+", body, re.M)),
+        len(re.findall(r"^##\s+", body, re.M)),
+        len(re.findall(r"^```", body, re.M)),
+    )
+
+
+def _parity_problems(files, langs):
+    if len(langs) <= 1 or langs[0] not in files:
+        return []
+    want = _structure_sig(files[langs[0]] or "")
     out = []
-    if not langs:
-        # Zero-value guard: an empty list => "all README group members are
-        # present" is an undecidable sentence.
-        return [M("readme.names_empty_structure")]
-    # Single entry => cross-link criterion degrades (issue #8): with only one
-    # language, "the switcher must point at every language" holds vacuously
-    # and self-reference is a degenerate requirement. The exist / non-empty
-    # criteria still apply as usual; cross-links are not checked (run()
-    # states the degraded criterion is not applicable -- never pretend to
-    # have checked).
-    switcher_applies = len(langs) > 1
-    for name in langs:
+    for name in langs[1:]:
         if name not in files:
-            out.append(M("readme.file_missing", name=name))
             continue
-        body = files[name] or ""
-        if not body.strip():
-            out.append(M("readme.file_empty", name=name))
-        if not switcher_applies:
-            continue
-        for other in langs:
-            if other not in body:
-                out.append(M("readme.switcher_incomplete",
-                             name=name, expected=other))
+        got = _structure_sig(files[name] or "")
+        if got != want:
+            out.append(M("readme.structure_mismatch", name=name, expected=langs[0],
+                         got="%d/%d/%d" % got, want="%d/%d/%d" % want))
     return out
 
 
-def problems_push(changed, langs):
-    """Push-set criterion (pure function). `changed` = the set of file paths
-    changed in this push.
-
-    **Conditional** (matching AGENTS' wording: "touch any one copy => this
-    push's change set must contain all copies"):
-      - no README touched at all => not applicable (pure code / pure docs
-        commits should not be blocked)
-      - at least one touched => all copies must be in the push set (one miss
-        reported per missing copy)
-
-    **Two list shapes, two criteria** (the distinction from doc lines 12/19):
-
-      - **Multi-entry** (the default trilingual trio) => **conditional**:
-        "touch any one copy => this push's change set must contain all
-        copies". None touched => not applicable (pure code commits should
-        not be blocked).
-      - **Single-entry** (`REFLECT_READMES=maintaince.md`, the "use a living
-        doc as the README" usage) => **unconditional**: "every push must
-        update it". This is the stronger one -- a single-entry list has no
-        "same batch" to speak of; its criterion is simply "must be present".
-
-    Warning: this used to be unconditional for **multi-entry** too, so any
-    commit not touching a README went red (consecutive CI reds: `0cef263`
-    only changed `i18n.py` + the ledger). For multi-entry the documented
-    form is conditional.
-    """
+def _one_readme_problems(name, files, langs):
+    if name not in files:
+        return [M("readme.file_missing", name=name)]
+    body = re.sub(r"<!--.*?-->", "", files[name] or "", flags=re.S)
     out = []
+    if not body.strip():
+        out.append(M("readme.file_empty", name=name))
+    if len(langs) > 1:
+        for other in langs:
+            if other not in body:
+                out.append(M("readme.switcher_incomplete", name=name, expected=other))
+    return out
+
+
+def problems_structure(files, langs):
+    """Structural criterion (pure function: the selftest depends on that)."""
+    if not langs:
+        return [M("readme.names_empty_structure")]
+    if len(set(langs)) != len(langs):
+        return [M("readme.duplicate_name")]
+    out = []
+    for name in langs:
+        out += _one_readme_problems(name, files, langs)
+    return out + _parity_problems(files, langs)
+
+
+def problems_push(changed, langs):
+    """Push-set criterion (pure function). `changed` = paths changed in this push;
+    `langs` = the README list.
+
+    An empty `langs` is `readme.names_empty_push`; an empty `changed` is
+    `readme.changed_empty` (empty is not a pass). Otherwise the two list shapes
+    are judged by `_push_missing_copies`, which returns one
+    `readme.not_in_push` per missing copy in list order.
+    """
     if not langs:
         return [M("readme.names_empty_push")]
     if not changed:
         return [M("readme.changed_empty")]
-    # Conditional form (all shapes): none touched => not applicable.
-    # A single-entry README group in a consumer repo (bilingual upstream
-    # fork with only README.md registered) must not turn every code-only
-    # push red — measured: a suite-only commit was blocked with
-    # readme.not_in_push(README.md) although no README was touched.
-    if not any(name in changed for name in langs):
-        return []
+    return _push_missing_copies(changed, langs)
+
+
+def _push_missing_copies(changed, langs):
+    """Two list shapes, two criteria.
+
+    **Multi-entry** (the default trilingual trio) => **conditional**: "touch any
+    one copy => this push's change set must contain all copies". None touched =>
+    not applicable, so pure code / pure docs commits are not blocked.
+
+    **Single-entry** => **unconditional**: "every push must update it" -- a
+    single-entry list has no "same batch", so its criterion is simply "must be
+    present" in `changed`.
+    """
+    out: list[Message] = []
+    # Multi-entry conditional form: none touched => not applicable
+    if len(langs) > 1 and not any(name in changed for name in langs):
+        return out
     for name in langs:
         if name not in changed:
             out.append(M("readme.not_in_push", name=name))
     return out
 
 
+def _push_mode(argv, langs):
+    """Read the change set and judge the push criterion."""
+    src = argv[1] if len(argv) > 1 else "-"
+    if src == "-":
+        lines = sys.stdin.read().splitlines()
+    elif not os.path.exists(src):
+        return fatal(M("readme.changed_file_missing", name=src))
+    else:
+        lines = open(src, encoding="utf-8", errors="replace").read().splitlines()
+    changed = {
+        (s[2:] if s.startswith("./") else s)
+        for l in lines if (s := l.strip().strip('"'))
+    }
+    probs = problems_push(changed, langs)
+    return finish(M("readme.title"), probs,
+                  M("readme.ok_push", count=len(langs)))
+
+
 def run(argv):
     langs = lang_names()
+    if not langs:
+        # `REFLECT_READMES=` (explicitly empty) is a decision, not a mistake:
+        # this repo has no README group. Say so and stand down -- reporting a
+        # missing file here would diagnose a stated intent as an absent file.
+        return off(M("readme.off_empty_group"))
     if argv and argv[0] == "--changed":
-        src = argv[1] if len(argv) > 1 else "-"
-        if src == "-":
-            lines = sys.stdin.read().splitlines()
-        elif not os.path.exists(src):
-            print(machine().emit("fatal", M("readme.changed_file_missing", name=src)),
-                  file=sys.stderr)
-            return 2
-        else:
-            lines = open(src, encoding="utf-8", errors="replace").read().splitlines()
-        changed = {l.strip().strip('"') for l in lines if l.strip()}
-        probs = problems_push(changed, langs)
-        return finish(M("readme.title"), probs,
-                      M("readme.ok_push", count=len(langs)))
+        return _push_mode(argv, langs)
+    if argv:
+        return fatal(M("readme.unknown_arg", arg=argv[0]))
     files = {}
     for name in langs:
         p = repo(name)
@@ -222,11 +243,15 @@ def _cases_structure():
         ("\u2605 readme.names_empty_structure",
          lambda: [p.code for p in problems_structure(_trio(), ())]
          == ["readme.names_empty_structure"]),
+        ("\u2605 readme.structure_mismatch",
+         lambda: [p.code for p in problems_structure(
+             dict(_trio(), **{"README.zh.md": "## extra\n" + _trio()["README.zh.md"]}),
+             LANGS)] == ["readme.structure_mismatch"]),
     ]
 
 
 def _cases_push():
-    """(2) Push-set criterion: trio conditional / single-entry unconditional."""
+    """Push-set cases: multi-entry conditional, single-entry unconditional."""
     return [
         ("readme.push_all_present",
          lambda: problems_push(set(LANGS) | {"code.py"}, LANGS) == []),
@@ -237,25 +262,16 @@ def _cases_push():
          lambda: [p.code for p in problems_push(
              {"README.md", "README.zh.md", "zreflect/facts.py"}, LANGS)]
          == ["readme.not_in_push"]),
-        # Single entry: the same-batch criterion does not degrade (issue #8)
         ("\u2605 readme.single_not_in_push",
          lambda: [p.code for p in problems_push({"other.md"}, ("maintaince.md",))]
          == ["readme.not_in_push"]),
-        # **Multi-entry conditional**: no README touched at all => not
-        # applicable (pure code commits should not be blocked).
-        # This is the class that went red on CI at `0cef263` (only i18n.py +
-        # the ledger changed) -- the doc specifies a conditional criterion
-        # ("touch any one => all copies included"), not an unconditional one.
         ("readme.multi_untouched_is_not_in_scope",
          lambda: problems_push({"zreflect/x.py"},
                                ("README.md", "README.zh.md")) == []),
-        # But **touch one and all copies must be included** (otherwise
-        # making it conditional would just be letting water through)
         ("\u2605 readme.multi_partial_still_fires",
          lambda: [p.code for p in problems_push(
              {"README.md", "zreflect/x.py"}, ("README.md", "README.zh.md"))
          ] == ["readme.not_in_push"]),
-        # (3) Empty input must be reported
         ("\u2605 readme.names_empty_push",
          lambda: [p.code for p in problems_push({"README.md"}, ())]
          == ["readme.names_empty_push"]),
@@ -265,15 +281,53 @@ def _cases_push():
     ]
 
 
+def _cases_knob():
+    """(3) Unset vs explicitly empty: two different intents, never collapsed."""
+    import gate as _gate  # noqa: PLC0415
+    import knobs  # noqa: PLC0415
+
+    def names(value):
+        """`readme_names()` under one environment: `value=None` = unset."""
+        saved = os.environ.get("REFLECT_READMES")
+        saved_repo = _gate.GATE_REPO
+        try:
+            _gate.GATE_REPO = "/nonexistent-repo"
+            if value is None:
+                os.environ.pop("REFLECT_READMES", None)
+            else:
+                os.environ["REFLECT_READMES"] = value
+            return knobs.readme_names()
+        finally:
+            _gate.GATE_REPO = saved_repo
+            if saved is None:
+                os.environ.pop("REFLECT_READMES", None)
+            else:
+                os.environ["REFLECT_READMES"] = saved
+
+    return [
+        # unset => the registry default, not an empty group
+        ("readme.unset_uses_registry_default",
+         lambda: names(None) == knobs.REGISTRY["REFLECT_READMES"][1].split(",")),
+        # explicitly empty => a real answer, not "fall back to three"
+        ("\u2605 readme.explicit_empty_is_empty_group",
+         lambda: names("") == [] and names("  ") == []),
+        ("readme.single_entry_honoured",
+         lambda: names("README.md") == ["README.md"]),
+    ]
+
+
 def _cases():
-    """One group per criterion (structure / push set): they read different
-    inputs and govern different things."""
-    return _cases_structure() + _cases_push()
+    """One group per criterion (structure / push set / knob intent): they read
+    different inputs and govern different things."""
+    return _cases_structure() + _cases_push() + _cases_knob()
 
 
 GATE = meta("Trilingual README gate",
             "language versions are three copies of one assertion: structural cross-links + same-batch on every push",
-            knobs=("REFLECT_READMES",), name_dependent=True)
+            knobs=("REFLECT_READMES",), name_dependent=True,
+            off_reason="a repo that sets REFLECT_READMES to an empty list states "
+                       "it has no README group; unset is different and uses the "
+                       "registry default")
 
 if __name__ == "__main__":
     sys.exit(main_selftest_or(sys.argv[1:], "check_readme_sync", _cases, run))

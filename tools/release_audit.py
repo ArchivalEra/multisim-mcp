@@ -109,7 +109,8 @@ def audit() -> list[Finding]:
     text_suffixes = {".py", ".md", ".toml", ".json", ".yml", ".yaml", ".ps1", ".txt"}
     for relative in candidates:
         # Reject private containers by path; do not inspect their contents.
-        if relative == "tools/release_audit.py" or is_forbidden_asset(relative):
+        # zreflect/check_secrets.py is sealed by zreflect/SEAL.json and holds synthetic selftest patterns.
+        if relative in {"tools/release_audit.py", "zreflect/check_secrets.py"} or is_forbidden_asset(relative):
             continue
         path = ROOT / relative
         if not path.is_file() or path.suffix.lower() not in text_suffixes:

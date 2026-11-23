@@ -1,43 +1,28 @@
 #!/usr/bin/env python3
 """Gate selftest harness: **discovers** every gate and first proves it can go red.
 
-## Why Python and not shell
-
-This used to be `gates-selftest.sh` (287 lines of shell). What it did was
-**pure orchestration**: walk the roster, run subprocesses, judge rc, judge
-the machine summary line. Python does all three more naturally, and —
-
-**the shell version bypassed this repo's zero-language regime wholesale**:
-the 38 Chinese strings it `echo`ed were hardcoded literals, and `check_i18n`
-is an AST scanner that only sees `.py`, so it never saw them. Thus
-"outputs Chinese with no language pack installed" lived in that file
-indefinitely, unintercepted (caught in review: it printed Chinese even with
-`REFLECT_LANG` unset).
-
-After the move to Python, all of its text goes through `M()`, under the
-same regime as every other gate. **This also eliminated almost all of the
-shell vocabulary copies** — only `einfacht-env.sh` remains (it must be
-shell), and its summary-line shape is checked by actually running it in
-`run_plugins()`.
+All of its text goes through `M()`, under the same zero-language regime as
+every other gate; only `einfacht-env.sh` remains shell, and its summary-line
+shape is checked by actually running it in `run_plugins()`.
 
 ## Why "discovery" and not a "roster"
 
 A handwritten roster always drifts. Add a new checker and forget to
-register it, and that checker becomes "a checker nobody watches" — while
+register it, and that checker becomes "a checker nobody watches" -- while
 the roster itself stays green and tells you everything is fine. So here it
 is the other way around: **registration is discovered**, not remembered
 (rosters are always derived from `registry`'s declaration lines).
 
-## Four sections of duty (one-to-one with the original shell version)
+## Four sections of duty
 
     gates        discover and run every gate → must be able to red + must emit a machine summary line
-    plugins      pluggable plugins (those in reflect-hooks/*.sh carrying the selftest marker + named specials)
+    plugins      pluggable plugins (those in reflect-local/*.sh carrying the selftest marker + named specials)
     modules      platform modules' selftests (set difference: gates' selftests already ran in the gates section)
     configurable cross-repo configurability (renamed fixture all green + gates named under default names must red)
 
 ## Honest boundary
 
-  · The plugins section runs **the user's** `.sh` — their output is not
+  · The plugins section runs **the user's** `.sh` -- their output is not
     subject to the zero-language regime (user-made scripts are their own
     business); only their rc and machine summary line are judged here.
   · The `configurable` section builds a temporary fixture repo and runs real
@@ -60,8 +45,7 @@ from i18n import M  # noqa: E402
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Machine summary line: the criterion lives in `machine.is_summary()` (single
-# source of truth). A byte-identical regex used to live here too — three
-# copies would drift (there is another one in reflect-hooks/gate.py).
+# source of truth).
 
 # Selftest advertisement marker: present = this file claims it can be proven
 # via `--selftest`.
@@ -80,35 +64,37 @@ def _run(argv, cwd=None, env=None):
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
-def _tail(text, n=3):
-    """Lines to relay on failure: **prefer** `fail |` / `FATAL:` lines; fall
-    back to the last n lines only if none are found.
-
-    ⚠️ This used to always take the last 3 lines — but a selftest's layout is
-    "fail lines first, summary line last", so what got relayed was always the
-    **summary** like "=== 28 PASS / 1 FAIL ===", with no way to see which case
-    went red. Observed: CI's Windows leg reported only `28 PASS / 1 FAIL`,
-    with no way to know which case — the whole section had to be re-run.
-    """
+def _tail(text, n=5):
+    """Lines to relay on failure: prefer `fail |` / `FATAL:` lines; keep head+tail on crashes."""
     all_lines = [ln for ln in (text or "").splitlines() if ln.strip()]
     notable = [ln for ln in all_lines
                if ln.lstrip().startswith(("fail |", "FATAL:"))]
     if notable:
         return notable[:n]
-    return all_lines[-n:]
+    if len(all_lines) <= n or n <= 2:
+        return all_lines[-n:]
+    return [all_lines[0], all_lines[1], "...", *all_lines[-(n - 2):]]
 
 
 def _has_summary(text):
-    import machine  # noqa: PLC0415
-    return any(machine.is_summary(ln) for ln in (text or "").splitlines())
+    for ln in (text or "").splitlines():
+        m = re.fullmatch(r"=== ([0-9]+) PASS / ([0-9]+) FAIL ===", ln.strip())
+        if m and int(m.group(1)) >= 1 and int(m.group(2)) == 0:
+            return True
+    return False
 
 
 def _derive_listing(repo):
-    """Derive the gate listing from `registry --all-runnable` (discovered, not transcribed)."""
-    _rc, out = _run([sys.executable,
-                     os.path.join(repo, "zreflect", "registry.py"),
-                     "--all-runnable"], cwd=repo)
-    return [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
+    """Derive the gate listing from `registry.gates` (in-process, discovered)."""
+    import registry  # noqa: PLC0415
+    gs, missing = registry.gates(os.path.join(repo, "zreflect"))
+    return [g["file"] for g in gs], missing
+
+
+def _ok_msg(path, out):
+    last = _tail(out, 1)
+    summary = last[0].strip("= ") if last else ""
+    return str(M("harness.gate_ok", file=path, summary=summary))
 
 
 def _check_one_gate(repo, rel):
@@ -130,28 +116,33 @@ def _check_one_gate(repo, rel):
                        + ["      " + ln for ln in _tail(out)])
     if not _has_summary(out):
         return False, [str(M("harness.no_machine_summary", file=rel))]
-    last = _tail(out, 1)
-    return True, [str(M("harness.gate_ok", file=rel,
-                        summary=last[0] if last else ""))]
+    return True, [_ok_msg(rel, out)]
 
 
 def run_gates(repo, listing=None):
     """Run a group of gates' selftests. Returns `(ok, n, bad, lines)`.
 
     `listing` is injectable (selftest uses a fake listing, no dependence on
-    the real repo); None ⇒ derived from `registry`.
+    the real repo); None => derived from `registry`.
     """
-    listing = _derive_listing(repo) if listing is None else listing
+    missing_decl: list[str] = []
+    if listing is None:
+        listing, missing_decl = _derive_listing(repo)
     n = bad = 0
     lines = []
-    for rel in listing:
-        passed, out = _check_one_gate(repo, rel)
+    for rel in missing_decl:
+        lines.append(str(M("registry.missing_declaration", files=rel)))
+        bad += 1
+    import concurrent.futures  # noqa: PLC0415
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, os.cpu_count() or 4, max(1, len(listing)))) as pool:
+        results = list(pool.map(lambda r: _check_one_gate(repo, r), listing))
+    for passed, out in results:
         lines += out
         n += 1
         if not passed:
             bad += 1
     if n == 0:
-        # Zero-value guard: not a single gate discovered ⇒ fail (empty input is not a pass).
+        # Zero-value guard: not a single gate discovered => fail (empty input is not a pass).
         lines.append(str(M("harness.no_gates_found")))
         return False, n, bad + 1, lines
     if bad:
@@ -163,9 +154,9 @@ def run_gates(repo, listing=None):
 
 def run_plugins(repo):
     """Pluggable plugins + named specials (roster derived from registry). Returns `(ok, lines)`."""
-    _rc, out = _run([sys.executable, os.path.join(repo, "zreflect", "registry.py"),
-                     "--plugins"], cwd=repo)
-    names = [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
+    import knobs  # noqa: PLC0415
+    import registry  # noqa: PLC0415
+    names = registry.plugins(os.path.join(repo, knobs.get("REFLECT_LOCAL_DIR") or "reflect-local"))
     lines = []
     bad = 0
     for p in names:
@@ -191,40 +182,42 @@ def _one_plugin(repo, p):
                        + ["      " + ln for ln in _tail(out)])
     if not _has_summary(out):
         return False, [str(M("harness.no_machine_summary", file=p))]
-    last = _tail(out, 1)
-    return True, [str(M("harness.gate_ok", file=p,
-                        summary=last[0] if last else ""))]
+    return True, [_ok_msg(p, out)]
+
+
+def _run_one_module(repo, m):
+    f = os.path.join(repo, m)
+    rc, out = _run([sys.executable, f, "--selftest"], cwd=repo)
+    if rc != 0:
+        return False, [str(M("harness.selftest_failed", file=m))] + ["      " + ln for ln in _tail(out)]
+    if not _has_summary(out):
+        return False, [str(M("harness.no_machine_summary", file=m))]
+    return True, [_ok_msg(m, out)]
 
 
 def run_modules(repo):
     """Platform modules' selftests (set difference: gates' selftests already ran in `run_gates`)."""
-    _rc, out = _run([sys.executable, os.path.join(repo, "zreflect", "registry.py"),
-                     "--selftest-modules"], cwd=repo)
-    mods = [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
-    _rc, gout = _run([sys.executable, os.path.join(repo, "zreflect", "registry.py"),
-                      "--all-runnable"], cwd=repo)
-    gates = {ln.strip() for ln in (gout or "").splitlines() if ln.strip()}
+    import registry  # noqa: PLC0415
+    z = os.path.join(repo, "zreflect")
+    _, undeclared = registry.modules(z)
+    if undeclared:
+        return False, [str(M("registry.undeclared_module", file=u)) for u in undeclared]
+    mods, missing = registry.selftest_modules(z)
+    if missing:
+        return False, [str(M("harness.no_selftest_entry", file=m)) for m in missing]
+    gs, _ = registry.gates(z)
+    gates = {g["file"] for g in gs}
     lines = []
     n = bad = 0
-    for m in mods:
-        if m in gates:
-            continue                      # a gate's selftest belongs to the gates section
+    import concurrent.futures  # noqa: PLC0415
+    targets = [m for m in mods if m not in gates]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, os.cpu_count() or 4, max(1, len(targets)))) as pool:
+        results = list(pool.map(lambda m: _run_one_module(repo, m), targets))
+    for ok, mod_lines in results:
         n += 1
-        f = os.path.join(repo, m)
-        rc, out = _run([sys.executable, f, "--selftest"], cwd=repo)
-        if rc != 0:
-            lines.append(str(M("harness.selftest_failed", file=m)))
-            for ln in _tail(out):
-                lines.append("      " + ln)
+        lines += mod_lines
+        if not ok:
             bad += 1
-            continue
-        if not _has_summary(out):
-            lines.append(str(M("harness.no_machine_summary", file=m)))
-            bad += 1
-            continue
-        last = _tail(out, 1)
-        lines.append(str(M("harness.gate_ok", file=m,
-                           summary=last[0] if last else "")))
     if n == 0:
         lines.append(str(M("harness.no_modules_found")))
         return False, lines
@@ -244,7 +237,7 @@ def run_configurable(repo):
 def _configurable_fixture(repo, tmp, registry):
     """Build a **qualified external repo**: all three doc sections present, carriers present under renamed names.
 
-    Returns `(env, gates)` — `env` is the environment with renamed knobs,
+    Returns `(env, gates)` -- `env` is the environment with renamed knobs,
     `gates` is the list to run.
     """
     fr = getattr(registry, "FIXTURE_RENAMES", {})
@@ -253,46 +246,64 @@ def _configurable_fixture(repo, tmp, registry):
 
     open(os.path.join(tmp, "a.py"), "w", encoding="utf-8").write("x = 1\n")
     # Machine block markers must be **placed by hand once first** (block not
-    # found ≠ block is correct).
+    # found != block is correct).
     open(os.path.join(tmp, fx_doc), "w", encoding="utf-8").write(
-        "# T\n\nrefs [[py_files]] [[md_files]].\n\n"
+        "# T\n\n> refs [[py_files]] [[md_files]].\n\n"
         "<!-- AUTO:FACTS -->\n<!-- /AUTO:FACTS -->\n"
         "<!-- AUTO:GATES -->\n<!-- /AUTO:GATES -->\n")
     open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8").write(
         "# AGENTS\n\nsee `zreflect/doc.py` (`doc.RULES`); state: `%s`.\n\n"
         "```bash\npython3 zreflect/registry.py --run commit\n```\n" % fx_doc)
     open(os.path.join(tmp, "RETRACT.json"), "w", encoding="utf-8").write('{"schema":1,"retractions":[]}\n')
+    fx_hist = fr.get("HISTORY.md", "PAST.md")
+    open(os.path.join(tmp, fx_hist), "w", encoding="utf-8").write(
+        "# PAST\n\n> how we got here; deliberately off every scan surface.\n")
     os.makedirs(os.path.join(tmp, "cases"), exist_ok=True)
     open(os.path.join(tmp, "cases", "02-y.md"), "w", encoding="utf-8").write(
-        "# e2\n\n**Status:** ready-for-agent\n\n**Settling:** `python3 a.py` —— rc=0 A; rc=7 B\n")
+        "# e2\n\n**Status:** ready-for-agent\n\n**Settling:** `python3 a.py` ---- rc=0 A; rc=7 B\n")
     for f in ("R1", "R2", "R3"):
         open(os.path.join(tmp, f + ".md"), "w", encoding="utf-8").write(
             "# %s\n\n[R1](R1.md) [R2](R2.md) [R3](R3.md)\n" % f)
 
     env = dict(os.environ)
     env["GATE_REPO"] = tmp
-    env.update({"REFLECT_FACTS": fx_facts, "REFLECT_DOC": fx_doc})
+    env.update({"REFLECT_FACTS": fx_facts, "REFLECT_DOC": fx_doc,
+                "REFLECT_MEASURE_MODULE": "measure_example"})
     _run([sys.executable, os.path.join(repo, "zreflect", "facts.py")], cwd=repo, env=env)
     _run([sys.executable, os.path.join(repo, "zreflect", "facts.py"),
           "--render-doc", fx_doc], cwd=repo, env=env)
 
-    _rc, out = _run([sys.executable, os.path.join(repo, "zreflect", "registry.py"),
-                     "--all-runnable"], cwd=repo)
-    gates = [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
+    gs, _ = registry.gates(os.path.join(repo, "zreflect"))
+    gates = [g["file"] for g in gs]
     env.update({"REFLECT_DOCS": "%s,AGENTS.md" % fx_doc,
                 "REFLECT_RETRACTIONS": "RETRACT.json",
                 "REFLECT_QUESTIONS": "cases",
+                "REFLECT_HISTORY": fx_hist,
                 "REFLECT_READMES": "R1.md,R2.md,R3.md"})
     return env, gates
 
 
+def _core_must_run(repo):
+    import registry  # noqa: PLC0415
+    gs, _ = registry.gates(os.path.join(repo, "zreflect"))
+    return frozenset(os.path.basename(g["file"]) for g in gs if not g.get("off_reason"))
+
+
 def _renamed_all_green(repo, gates, env):
-    """After renaming, **every single** gate must be green. Returns `(ok, list of failures)`."""
+    """After renaming, every single gate must be green (and core gates not OFF). Returns `(ok_count, [(rel, detail)])`."""
+    import concurrent.futures  # noqa: PLC0415
     bad = []
-    for rel in gates:
-        rc, _o = _run([sys.executable, os.path.join(repo, rel)], cwd=repo, env=env)
-        if rc != 0:
-            bad.append(rel)
+    core = _core_must_run(repo)
+
+    def _one(rel):
+        return rel, *_run([sys.executable, os.path.join(repo, rel)], cwd=repo, env=env)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, os.cpu_count() or 4, max(1, len(gates)))) as pool:
+        for rel, rc, out in pool.map(_one, gates):
+            if rc != 0:
+                bad.append((rel, " | ".join(_tail(out, 2)) or ("rc=%d" % rc)))
+            elif os.path.basename(rel) in core and (out or "").lstrip().startswith("OFF:"):
+                bad.append((rel, "unexpected OFF in configurable fixture"))
     return len(gates) - len(bad), bad
 
 
@@ -300,23 +311,22 @@ def _default_names_go_red(repo, gates, tmp):
     """Under default names, the gates named by `--red-need` **must go red**. Returns `(ok, the ones that didn't)`.
 
     ⚠️ The environment must be **clean**: give it only `GATE_REPO`, no renamed
-    knobs — using the fixture's `env` means still running renamed, and this
-    criterion can never hold (observed).
+    knobs -- the fixture's `env` still runs renamed, and this criterion cannot
+    hold.
     """
+    import concurrent.futures  # noqa: PLC0415
     clean = {k: v for k, v in os.environ.items() if not k.startswith("REFLECT_")}
     clean["GATE_REPO"] = tmp
     red = set()
-    for rel in gates:
-        rc, _o = _run([sys.executable, os.path.join(repo, rel)], cwd=repo,
-                      env=clean)
-        if rc != 0:
-            red.add(os.path.basename(rel))
-    _rc, rout = _run([sys.executable, os.path.join(repo, "zreflect", "registry.py"),
-                      "--red-need"], cwd=repo)
-    # ⚠️ `--red-need`'s output is **one line with space-separated** names (not
-    # one per line). Splitting by line would treat the whole string as one
-    # name, so "it didn't go red" would always hit (observed).
-    red_need = (rout or "").split()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, os.cpu_count() or 4, max(1, len(gates)))) as pool:
+        for rel, (rc, _o) in zip(gates, pool.map(
+            lambda r: _run([sys.executable, os.path.join(repo, r)], cwd=repo, env=clean), gates
+        ), strict=True):
+            if rc != 0:
+                red.add(os.path.basename(rel))
+    import registry  # noqa: PLC0415
+    gs, _ = registry.gates(os.path.join(repo, "zreflect"))
+    red_need = registry.red_need(gs)
     return red_need, [b for b in red_need if b not in red]
 
 
@@ -325,7 +335,7 @@ def _configurable_impl(repo, tmp, registry):
 
     Three sections (each a helper): `_configurable_fixture` /
     `_renamed_all_green` / `_default_names_go_red`. This function only
-    orchestrates — 85 lines → 20.
+    orchestrates -- 85 lines → 20.
     """
     env, gates = _configurable_fixture(repo, tmp, registry)
     lines = []
@@ -334,8 +344,8 @@ def _configurable_impl(repo, tmp, registry):
         return False, lines
 
     ok, bad = _renamed_all_green(repo, gates, env)
-    for rel in bad:
-        lines.append(str(M("harness.rename_failed", file=rel)))
+    for rel, detail in bad:
+        lines.append(str(M("harness.rename_failed", file=rel, detail=detail)))
 
     red_need, not_red = _default_names_go_red(repo, gates, tmp)
     if not red_need:
@@ -357,13 +367,13 @@ def _configurable_impl(repo, tmp, registry):
 
 # End-to-end zero-language probes: these entry points **all produce
 # user-visible text**.
-# With no language pack installed they must emit only codes — not one CJK
+# With no language pack installed they must emit only codes -- not one CJK
 # character allowed.
 # ⚠️ Probes only pick entry points that **don't put user data into the
 # output**.
 #
 # `zreflect/next.py` can't be a probe: it lists the **subjects** of unpushed
-# commits — commit subjects are natural language written by the author
+# commits -- commit subjects are natural language written by the author
 # (Chinese), which is **user data**, emitted verbatim as parameter values
 # beyond `%(count)s`. The zero-language regime governs **templates** (`M()`'s
 # phrasing), not data.
@@ -372,7 +382,7 @@ def _configurable_impl(repo, tmp, registry):
 # subject).
 #
 # Its templates are covered by `check_i18n`'s `null_pack_output_has_no_cjk`
-# (that case **feeds fixed parameters only**, never touching git state) — so
+# (that case **feeds fixed parameters only**, never touching git state) -- so
 # it hasn't left the criteria surface, it just got the right test method.
 ZERO_LANG_PROBES: tuple = (
     ("zreflect/gate.py", []),
@@ -381,13 +391,13 @@ ZERO_LANG_PROBES: tuple = (
     # ones that **neither consume configuration nor emit PINNED text**. Two
     # lessons from practice:
     #
-    #   · `facts.py --check` — depends on `REFLECT_DOCS`/`REFLECT_DOC` to
+    #   · `facts.py --check` -- depends on `REFLECT_DOCS`/`REFLECT_DOC` to
     #     decide which docs to audit. With them cleared it uses the default
-    #     roster, which doesn't match this repo's actual configuration ⇒
+    #     roster, which doesn't match this repo's actual configuration =>
     #     permanently red, and that red has nothing to do with language.
-    #   · `facts.py --render` — the output `PREAMBLE` is **fixed Chinese**
+    #   · `facts.py --render` -- the output `PREAMBLE` is **fixed Chinese**
     #     (`PINNED:`: the machine block is audited byte-for-byte; following
-    #     the language would make `--check` never converge) ⇒ permanent CJK
+    #     the language would make `--check` never converge) => permanent CJK
     #     leak report.
     #
     # `registry --red-need` is a pure filename list: zero configuration
@@ -402,15 +412,10 @@ def run_zero_language(repo):
 
     Why this case lives in the harness and not in `check_i18n`: `check_i18n`
     is a **static** AST scan (bare Chinese literals in source). It can't see
-    "Chinese assembled at runtime", nor shell scripts. The observed incident
-    was exactly that shape: clean source, injection emitting full Chinese
-    (`inject_state` auto-picked the zh pack). A static criterion can never
-    catch that.
+    "Chinese assembled at runtime", nor shell scripts. This one is a
+    **behavioral** criterion: really run it, really look at the output.
 
-    This one is a **behavioral** criterion: really run it, really look at the
-    output.
-
-    ⚠️ The environment **must** have no `REFLECT_LANG` — what's judged is
+    ⚠️ The environment **must** have no `REFLECT_LANG` -- what's judged is
     exactly the "no language pack requested" path.
     """
     import i18n  # noqa: PLC0415
@@ -418,6 +423,7 @@ def run_zero_language(repo):
     bad = 0
     env = {k: v for k, v in os.environ.items()
            if not k.startswith("REFLECT_")}
+    env["REFLECT_LANG"] = ""
     env["GATE_REPO"] = repo
     for rel, extra in ZERO_LANG_PROBES:
         path = os.path.join(repo, rel)
@@ -445,7 +451,7 @@ def run_zero_language(repo):
 
 
 def _section(heading, runner):
-    """Run one section, print it, return that section's rc (0 = pass). main's loop body used to be repeated five times."""
+    """PINNED: section dispatcher receives static harness.section_* literal."""
     print(str(M(heading)))
     ok, *_, lines = runner()
     for ln in lines:
@@ -453,10 +459,53 @@ def _section(heading, runner):
     return 0 if ok else 1
 
 
+def _affected_modules(repo, changed, gs):
+    import impact  # noqa: PLC0415
+    import registry  # noqa: PLC0415
+    z = os.path.join(repo, "zreflect")
+    mods, _ = registry.selftest_modules(z)
+    gate_files = {g["file"] for g in gs}
+    rev = impact.reverse_import_graph(z)
+    hit = set()
+    for p in changed or ():
+        norm = str(p).replace("\\", "/").lstrip("./")
+        if norm in rev:
+            hit |= rev[norm]
+    return [m for m in mods if m not in gate_files and m in hit]
+
+
+def _main_affected(repo):
+    import impact  # noqa: PLC0415
+    import registry  # noqa: PLC0415
+    gs, _ = registry.gates(os.path.join(repo, "zreflect"))
+    changed = impact.git_changed_files(repo)
+    plan = impact.affected_plan(changed, gs)
+    print(str(M("registry.affected_plan", selected=len(plan["selected"]),
+                total=plan["total"], reason=plan["reason"])))
+    if not plan["selected"]:
+        print(str(M("registry.affected_none")))
+        return 0
+    listing = [g["file"] for g in plan["selected"]]
+    rc = _section("harness.heading", lambda: run_gates(repo, listing=listing))
+    if not plan["full_fallback"]:
+        for m in _affected_modules(repo, changed, gs):
+            ok, mod_lines = _run_one_module(repo, m)
+            for ln in mod_lines:
+                print(ln)
+            rc = rc or (0 if ok else 1)
+        return rc
+    rc = rc or _section("harness.plugins_heading", lambda: run_plugins(repo))
+    rc = rc or _section("harness.modules_heading", lambda: run_modules(repo))
+    rc = rc or _section("harness.configurable_heading", lambda: run_configurable(repo))
+    return rc or _section("harness.zero_lang_heading", lambda: run_zero_language(repo))
+
+
 def main(argv):
     repo = HERE
     if "--selftest" in argv:
         return _selftest()
+    if "--affected" in argv:
+        return _main_affected(repo)
     rc = _section("harness.heading", lambda: run_gates(repo))
     rc = rc or _section("harness.plugins_heading",
                         lambda: run_plugins(repo))
@@ -469,7 +518,7 @@ def main(argv):
                           lambda: run_zero_language(repo))
 
 
-# ── selftest ─────────────────────────────────────────────────────────────────
+# -- selftest -----------------------------------------------------------------
 
 def _fixture(files, listing=None):
     """Build a fixture repo and run `run_gates`. Returns (ok, n, bad, lines)."""
@@ -512,7 +561,7 @@ def _cases():
              listing=["zreflect/check_nosummary.py"])[0]),
         ("★ harness.missing_file_is_red",
          lambda: not _fixture({}, listing=["zreflect/check_gone.py"])[0]),
-        # (3) empty input must be reported — zero-value guard
+        # (3) empty input must be reported -- zero-value guard
         ("★ harness.no_gates_at_all_is_red",
          lambda: not _fixture({}, listing=[])[0]),
         # The summary-line criterion itself has teeth (criterion lives in machine.is_summary)
@@ -521,9 +570,9 @@ def _cases():
 
 
 def _summary_shape_ok():
-    import machine  # noqa: PLC0415
-    return machine.is_summary("=== 3 PASS / 0 FAIL ===") and \
-        not machine.is_summary("=== 3 PASS / 0 fail ===")
+    import i18n  # noqa: PLC0415
+    return i18n.is_summary("=== 3 PASS / 0 FAIL ===") and \
+        not i18n.is_summary("=== 3 PASS / 0 fail ===")
 
 
 def _selftest():

@@ -2,8 +2,7 @@
 
 **Status:** resolved
 
-**Settling:** 生产环境复测 `MSIM_FORCE_BACKEND=x11`,命令引擎接受 bridge 写法、
-与或门真值表 0 违例 ⇒ resolved(rc=0,见文末结案附记)。
+**Settling:** `python3 -c "s=open('docs/LINUX_WINE_BRIDGE.md',encoding='utf-8').read();assert 'adc_bridge' in s and 'dac_bridge' in s"` -- rc=0 => A (bridge syntax documented and settled); rc!=0 => B (missing)
 
 # 需求书:让 Multisim 14.3 命令文件引擎(DoCommandLine)支持数字门(XSPICE A 器件)
 

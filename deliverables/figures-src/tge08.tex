@@ -1,0 +1,113 @@
+\documentclass[border=16pt]{standalone}
+\usepackage{ctex}
+\usepackage[european, straightvoltages]{circuitikz}
+\begin{document}
+\begin{circuitikz}[line width=0.8pt, font=\normalsize]
+
+% fig-ge-08 共射放大电路：直流通路与微变等效电路工程图
+
+% ==================== 顶部两栏标题 ====================
+\node[anchor=south, font=\large\bfseries] at (0.3, 6.7) {直流通路（电容视为断开）};
+\node[anchor=south, font=\large\bfseries] at (8.0, 6.7) {微变等效（交流通路）};
+
+% ==================== 中间虚线分界与两侧竖排文字 ====================
+\draw[dashed, gray!70, line width=0.8pt] (4.0, 0.4) -- (4.0, 6.2);
+\node[rotate=90, font=\small, text=gray!25!black] at (3.64, 3.3) {大写算工作点};
+\node[rotate=90, font=\small, text=gray!25!black] at (4.36, 3.3) {小写算放大};
+
+% ==================== 左栏：直流通路 ====================
+% 三极管放置
+\node[npn] (Q) at (0.6, 2.5) {};
+
+% 发射极垂直引下接地
+\draw (Q.E) -- ++(0,-0.7) node[ground]{};
+
+% 集电极引线：垂直引出 T 接点，直连 Rc 和电源
+\draw (Q.C) -- ++(0, 0.6) coordinate (nodeC);
+\draw (nodeC) to[R, l_=$R_c$] ++(0, 1.6) coordinate (topVcc);
+\draw (topVcc) -- ++(0, 0.8) node[above, font=\normalsize] {$V_{CC}$};
+\node[circ] at (topVcc) {};
+
+% Rb 支路：自电源节点水平向左折向 Rb
+\coordinate (topRb) at (-1.6, 4.7);
+\draw (topVcc) -| (topRb) to[R, l_=$R_b$] (-1.6, 3.1);
+
+% 基极引线：自 Q.B 直角折线连接到 Rb 下端
+\draw (Q.B) -| (-1.6, 3.1);
+
+% 集电极 T 形分支实心接点
+\node[circ] at (nodeC) {};
+
+% 输出耦合电容断开支路：自集电极节点向右水平引出
+% 使用 circuitikz 现成 C 元件，两极板中间断开
+\draw (nodeC) -- ++(0.9, 0) coordinate (capStart) to[C] ++(1.1, 0) coordinate (capEnd) -- ++(0.5, 0);
+\coordinate (capMid) at ($(capStart)!0.5!(capEnd)$);
+\node[above=8pt, font=\small] at (capMid) {$C$};
+\node[below=8pt, font=\small] at (capMid) {（断开）};
+
+% Q 点标注（大写）：居中在左栏电路下方
+\node[anchor=north, font=\small] at (0.3, 0.7)
+  {Q 点（大写）：$I_{BQ}$、$I_{CQ}$、$U_{CEQ}$};
+
+
+% ==================== 右栏：微变等效电路 ====================
+% 高度与左栏对齐：母线高 4.7，地线高 2.1
+% 向右平移 0.4，为中间虚线与竖排文字留出充裕对称空间
+\coordinate (inB)    at (5.1, 4.7);
+\coordinate (inE)    at (5.1, 2.1);
+\coordinate (rbeTop) at (5.8, 4.7);
+\coordinate (rbeBot) at (5.8, 2.1);
+
+% 输入端口 B 与 E
+\draw (rbeTop) -- (inB) node[left, font=\small] {$B$};
+\node[circ] at (inB) {};
+\draw (rbeBot) -- (inE) node[left, font=\small] {$E$};
+\node[circ] at (inE) {};
+
+% 输入基极电流 Ib（标注在导线上方）
+\draw[-{Stealth[length=4pt, width=3pt]}, blue!80!black] (5.2, 4.95) -- (5.7, 4.95) node[midway, above, font=\scriptsize] {$I_b$};
+
+% r_be 支路：r_be 接在输入与地之间
+\draw (rbeTop) to[R, l_=$r_{be}$] (rbeBot);
+\node[circ] at (rbeTop) {};
+\node[circ] at (rbeBot) {};
+\draw (rbeBot) node[ground]{};
+
+% 输出侧坐标
+\coordinate (srcTop) at (7.4, 4.7);
+\coordinate (srcBot) at (7.4, 2.1);
+\coordinate (roTop)  at (9.1, 4.7);
+\coordinate (roBot)  at (9.1, 2.1);
+\coordinate (outC)   at (9.7, 4.7);
+\coordinate (outE)   at (9.7, 2.1);
+
+% 顶部集电极输出母线
+\draw (srcTop) -- (roTop) -- (outC) node[right, font=\small] {$C$};
+\node[circ] at (outC) {};
+
+% 底部发射极公共地线
+\draw (srcBot) -- (roBot) -- (outE) node[right, font=\small] {$E$};
+\node[circ] at (outE) {};
+
+% 受控电流源 βIb：垂直向下，标签置于右侧且留有充足间距
+\draw (srcTop) to[cI, l=$\beta I_b$] (srcBot);
+\node[circ] at (srcTop) {};
+\node[circ] at (srcBot) {};
+
+% ro 支路：并联在输出侧
+\draw (roTop) to[R, l=$r_o$] (roBot);
+\node[circ] at (roTop) {};
+\node[circ] at (roBot) {};
+
+% 输出侧接地（直流源按交流接地，发射极为参考地）
+\draw (roBot) node[ground]{};
+
+% 右侧参数列表说明
+\node[anchor=west, font=\small, align=left] at (10.4, 3.4)
+  {$A_u$ 电压放大\\[8pt]
+   $r_i$ 输入电阻\\[8pt]
+   $r_o$ 输出电阻\\[8pt]
+   直流源按交流接地};
+
+\end{circuitikz}
+\end{document}

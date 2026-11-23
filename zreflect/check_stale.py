@@ -49,38 +49,52 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import knobs  # noqa: E402
+from facts import (  # noqa: E402
+    CITE_RE,
+    DATED_RECORD,
+    age_days,
+    facts_of,
+    living_lines,
+    load_or_fatal,
+    value_of,
+)
 from gate import fatal, finish, guard_nonempty, main_selftest_or, meta, repo  # noqa: E402
-from i18n import M  # noqa: E402
-from ledger import age_days, facts_of, load_or_fatal, value_of  # noqa: E402
-from living import CITE_RE, DATED_RECORD, living_lines  # noqa: E402
+from i18n import M, Message  # noqa: E402
 
-# **Not resolved at module level**: `knobs.docs_names()` is the single source
-# of truth (defaults live in the registry), and a module-level constant would
-# freeze it at import time -- neither the selftest nor the renamed-doc fixtures
-# could change it afterwards.
-# Warning: a five-name literal was once handwritten here and drifted away from
-# the registry's six names (PRINCIPLES.md was the missing one).
-HIST_SECS = tuple(s for s in os.environ.get("REFLECT_HISTORY_SECS", "").split(",") if s)
-RETIRED = tuple(s for s in os.environ.get("REFLECT_RETIRED", "").split(",") if s)
-STALE_DAYS_RAW = os.environ.get("REFLECT_STALE_DAYS", "").strip()
+# **Resolved via the knob helper**: the parse lives in `knobs.history_secs()`
+# (single origin shared with `check_retractions`).
+HIST_SECS = knobs.history_secs()
+
+
+def _retired():
+    """The retired-name list (`REFLECT_RETIRED`; unset or empty => empty)."""
+    raw = knobs.raw("REFLECT_RETIRED")
+    if not raw:
+        return ()
+    return tuple(s.strip() for s in raw.split(",") if s.strip())
+
+
+def _stale_days_status():
+    """Return `(float_days_or_None, bad_raw_or_None)` for `REFLECT_STALE_DAYS`."""
+    import math  # noqa: PLC0415
+    raw = (knobs.raw("REFLECT_STALE_DAYS") or "").strip()
+    if not raw:
+        return None, None
+    try:
+        v = float(raw)
+    except ValueError:
+        return None, raw
+    if not math.isfinite(v) or v < 0:
+        return None, raw
+    return v, None
 
 
 def _stale_days():
-    """Age-check alert threshold (days, issue #3 item 2): configurable via
-    `REFLECT_STALE_DAYS`.
+    """Age-check alert threshold (`REFLECT_STALE_DAYS`); unset/bad => None."""
+    return _stale_days_status()[0]
 
-    Unset / bad value => None -- the rule is **declared off** (same precedent
-    as REFLECT_RETIRED), not silently pretended to be checked.
-    """
-    if not STALE_DAYS_RAW:
-        return None
-    try:
-        return float(STALE_DAYS_RAW)
-    except ValueError:
-        return None
-
-SHA_NEAR = re.compile(r"sha|hash|校验|指纹", re.I)
-SHA_TOKEN = re.compile(r"(?<![0-9a-f`])([0-9a-f]{8,64})(?![0-9a-f`])")
+SHA_NEAR = re.compile(r"sha|hash|commit|digest|checksum|校验|指纹", re.I)
+SHA_TOKEN = re.compile(r"(?<![0-9A-Fa-f`])([0-9A-Fa-f]{8,64})(?![0-9A-Fa-f`])")
 
 
 def _sha_facts(f):
@@ -98,68 +112,53 @@ def _sha_facts(f):
 # "history" marker, it is a **re-playable** anchor.
 
 
-def _is_sourced(line):
-    """Does this line carry **explicit, verifiable** provenance?
-
-    Before issue #25: `HIST_MARK` (the two characters meaning "history") was
-    **by itself** enough to count as provenance => any assertion became
-    whole-line exempt by adding a "history" label. Measured downstream: the
-    same fabricated sha, plus only the word "history", went from red to
-    green. The gate's own error message said "or add a historical
-    marker/provenance" -- it was **teaching users to bypass itself**
-    (`living.py:11-19` already admitted this miss, but only in a comment).
-
-    Now: "history" **does not exempt the content**; it only means "not
-    reconciled against today". The line must still give one of the verifiable
-    provenance forms:
-
-      - `DATED_RECORD` -- a delivery-package name (with an 8-digit date) or a
-        commit sha **inside backticks**;
-      - `[[key]]` -- a citation of a ledger fact (re-playable).
-
-    Bare "history" no longer suffices -- it is a **hint**, not evidence. To
-    genuinely exempt a historical assertion, register it in
-    `retractions.json` / `REFLECT_RETIRED` (single source of truth), or give a
-    delivery-name/sha citation.
+def _has_dated_record(line):
+    """A delivery-package name with an 8-digit date, or a commit sha inside
+    backticks, is verifiable provenance (`DATED_RECORD`).
     """
-    return bool(DATED_RECORD.search(line) or CITE_RE.search(line))
+    return bool(DATED_RECORD.search(line))
+
+
+def _has_ledger_citation(line, f=None):
+    """`[[key]]` is a re-playable citation of an existing ledger fact (`CITE_RE`)."""
+    keys = CITE_RE.findall(line)
+    if not keys:
+        return False
+    return True if f is None else any(k in f for k in keys)
+
+
+def _is_sourced(line, f=None):
+    """Does this line carry **explicit, verifiable** provenance?"""
+    return _has_dated_record(line) or _has_ledger_citation(line, f)
 
 
 def _sha_assertion_problems(f, docs, hist):
-    """R1: hex strings near sha / hash words in living state need verifiable
-    provenance.
-
-    Three homes (ledger fact / verifiable provenance); none => report. Zero
-    sha-class facts in the ledger => a separate "measure it into the ledger
-    first" report (empty is not a pass).
-    """
+    """R1: hex strings near sha / hash words in living state need verifiable provenance."""
     out = []
     shas = _sha_facts(f)
     for name, body in sorted(docs.items()):
         for lineno, line, is_living in living_lines(body, hist):
-            out += _sha_line_problems(name, lineno, line, is_living, shas)
+            out += _sha_line_problems(name, lineno, line, is_living, shas, f)
     return out
 
 
-def _sha_line_problems(name, lineno, line, is_living, shas):
-    """Per-line sha provenance verdict: not living / not near a sha word /
-    already sourced => no report.
-
-    With zero shas in the ledger, report "measure it into the ledger first"
-    first (empty is not a pass); with a ledger present but a string matching
-    no known sha (including prefix relations) => report unsourced.
-    """
-    if not is_living or not SHA_NEAR.search(line) or _is_sourced(line):
+def _sha_line_problems(name, lineno, line, is_living, shas, f=None):
+    """Per-line sha provenance verdict (per-token, no whole-line exemption)."""
+    if not is_living or not SHA_NEAR.search(line):
         return []
-    toks = SHA_TOKEN.findall(line)
+    cleaned = DATED_RECORD.sub(" ", line)
+    toks = SHA_TOKEN.findall(cleaned)
     if not toks:
         return []
     if not shas:
         return [M("stale.sha_no_facts", name=name, lineno=lineno)]
+    cited = {str(value_of(f[k])).lower() for k in CITE_RE.findall(line)
+             if f and k in f and isinstance(value_of(f[k]), str)}
     return [M("stale.sha_unsourced", name=name, lineno=lineno, actual=tok[:16])
             for tok in toks
-            if not any(tok == s or s.startswith(tok) or tok.startswith(s[:len(tok)])
-                       for s in shas)]
+            if tok.lower() not in cited
+            and not any(tok.lower() == s or s.startswith(tok.lower()) or tok.lower().startswith(s[:len(tok)])
+                        for s in shas)]
 
 
 def _stale_age_problems(f, sd):
@@ -169,7 +168,7 @@ def _stale_age_problems(f, sd):
     Unconfigured (sd is None) => no check (declared off); unreadable timestamp
     => also reported (say so when unreadable, never guess 0).
     """
-    out = []
+    out: list[Message] = []
     if sd is None:
         return out
     for k in sorted(f):
@@ -196,37 +195,49 @@ def _retired_name_problems(docs, hist, retired):
     out = []
     for name, body in sorted(docs.items()):
         for lineno, line, is_living in living_lines(body, hist):
-            if not is_living or _is_sourced(line):
+            if not is_living:
                 continue
+            cleaned = DATED_RECORD.sub(" ", line)
             for w in retired:
                 if re.search(r"(?<![0-9A-Za-z_-])%s(?![0-9A-Za-z_.-])" % re.escape(w),
-                             line, re.I):
+                             cleaned, re.I):
                     out.append(M("stale.retired_name", name=name, lineno=lineno,
                                  entry=w))
     return out
 
 
-def problems(ledger, docs, retired=RETIRED, hist_secs=None, stale_days=None):
+_UNSET = object()
+
+
+def problems(ledger, docs, retired=_UNSET, hist_secs=None, stale_days=_UNSET):
     """Return the problem list (pure function: the selftest depends on that).
-    `docs` = {file name: body}.
+    `ledger` = the loaded ledger; `docs` = {file name: body}.
 
-    One criterion layer = one function, concatenated in the order
-    R1 -> age check -> R2 (order is the report order).
-
-    `hist_secs=None` => use the module-level `REFLECT_HISTORY_SECS`; the
-    selftest passes it explicitly, which is the only way to test it.
-    `stale_days=None` => use `REFLECT_STALE_DAYS` (unset => age rule off).
+    Empty ledger => `stale.ledger_empty`; empty `docs` => `stale.no_docs`
+    (empty is not a pass). Otherwise `_problem_layers` resolves the three knobs
+    and returns reports in R1 -> age -> R2 order.
     """
-    hist = HIST_SECS if hist_secs is None else hist_secs
     f = facts_of(ledger)
     if not f:
         return [M("stale.ledger_empty")]
     if not docs:
         return [M("stale.no_docs")]
-    sd = _stale_days() if stale_days is None else stale_days
+    return _problem_layers(f, docs, hist_secs, stale_days, retired)
+
+
+def _problem_layers(f, docs, hist_secs, stale_days, retired):
+    """The three criterion layers in report order: R1 sha provenance, age check,
+    R2 retired names. One layer = one function, concatenated.
+
+    `hist_secs=None` => `HIST_SECS`; `stale_days=None` => off (`_UNSET` => `_stale_days()`);
+    `retired=()` => off (`_UNSET` => `_retired()`).
+    """
+    hist = HIST_SECS if hist_secs is None else hist_secs
+    sd = _stale_days() if stale_days is _UNSET else stale_days
+    retired_names = _retired() if retired is _UNSET else retired
     return (_sha_assertion_problems(f, docs, hist)
             + _stale_age_problems(f, sd)
-            + _retired_name_problems(docs, hist, retired))
+            + _retired_name_problems(docs, hist, retired_names))
 
 
 def _load_docs(names):
@@ -242,38 +253,33 @@ def _load_docs(names):
 
 def scanned_docs():
     """The **list of files** this gate scans (`knobs.docs_names()`, the single
-    source of truth).
-
-    Warning: this function name used to return a {name: body} dict while
-    `check_retractions`'s same-named function returned a list -- one name,
-    two return shapes. The reconciliation criterion on the `knobs` side
-    therefore read the dict's keys (it happened to work). The name says
-    "list", so it returns a list.
+    source of truth). Returns a list of names, not a {name: body} dict.
     """
     return knobs.docs_names()
 
 
 def run(argv):
+    days, bad_days = _stale_days_status()
+    if bad_days is not None:
+        return fatal(M("stale.bad_days", value=bad_days))
     docs = _load_docs(scanned_docs())
     rc = guard_nonempty("check_stale", docs, M("stale.scanned_docs"))
     if rc:
         return rc
-    facts_name = os.environ.get("REFLECT_FACTS", "FACTS.json")
+    facts_name = knobs.get("REFLECT_FACTS")
     if not os.path.exists(repo(facts_name)):
         return fatal(M("stale.ledger_missing", name=facts_name))
     probs = problems(load_or_fatal(repo(facts_name)), docs)
+    retired = _retired()
     if not probs:
-        if not RETIRED:
+        if not retired:
             print(M("stale.retired_rule_off"), file=sys.stderr)
-        if _stale_days() is None:
+        if days is None:
             print(M("stale.age_rule_off"), file=sys.stderr)
-    rc = finish(M("stale.title"), probs,
-                M("stale.ok", count=len(docs),
-                  declared=M("stale.retired_none") if not RETIRED
-                  else M("stale.retired_count", count=len(RETIRED))))
-    if rc == 1 and "--list" in argv:
-        return 0                      # --list lists only, never changes, always 0 (manual patrol mode)
-    return rc
+    return finish(M("stale.title"), probs,
+                  M("stale.ok", count=len(docs),
+                    declared=M("stale.retired_none") if not retired
+                    else M("stale.retired_count", count=len(retired))))
 
 
 def _cases_fixture():
@@ -295,31 +301,43 @@ def _cases_sha(fx):
     led_sha, led_plain, bare = fx["led_sha"], fx["led_plain"], fx["bare"]
     return [
     ("stale.sourced_history_sha",
-     lambda: problems(led_plain, {"A.md": "old sha abcdef01 (retracted, see `abc1234`)\n"})
+     lambda: problems(led_plain, {"A.md": "old sha `abc1234` (retracted)\n"},
+                      stale_days=None, retired=())
      == []),
+    ("★ stale.dated_record_does_not_exempt_other_sha",
+     lambda: [p.code for p in problems(
+         led_sha, {"A.md": "deployed sha DEADBEEF00 -20260101\n"},
+         stale_days=None, retired=())] == ["stale.sha_unsourced"]),
     # (2) Reverse criterion (issue #25): a historical marker is **no longer**
     # a get-out-of-jail card
     ("★ stale.sha_no_facts·history_mark",
      lambda: [p.code for p in problems(
-         led_plain, {"A.md": "deployed sha256 history is 8287589ebdb53b4c\n"})]
+         led_plain, {"A.md": "deployed sha256 history is 8287589ebdb53b4c\n"},
+         stale_days=None, retired=())]
      == ["stale.sha_no_facts"]),
     ("stale.cite_anchor",
-     lambda: problems(led_sha, {"A.md": "old sha256 [[site_sha]] retracted\n"}) == []),
+     lambda: problems(led_sha, {"A.md": "old sha256 [[site_sha]] retracted\n"},
+                      stale_days=None, retired=()) == []),
     ("stale.no_sha_assertion",
-     lambda: problems(led_plain, {"A.md": "a fine day\n"}) == []),
+     lambda: problems(led_plain, {"A.md": "a fine day\n"},
+                      stale_days=None, retired=()) == []),
     ("stale.declared_history_section",
-     lambda: problems(led_plain, {"A.md": "## 5 history\n" + bare}, hist_secs=("5",))
+     lambda: problems(led_plain, {"A.md": "## 5 history\n" + bare}, hist_secs=("5",),
+                      stale_days=None, retired=())
      == []),
     # (2) What must be reported gets reported
     ("★ stale.sha_unsourced",
-     lambda: [p.code for p in problems(led_sha, {"A.md": bare})]
+     lambda: [p.code for p in problems(led_sha, {"A.md": bare},
+                                       stale_days=None, retired=())]
      == ["stale.sha_unsourced"]),
     ("★ stale.sha_no_facts",
-     lambda: [p.code for p in problems(led_plain, {"A.md": bare})]
+     lambda: [p.code for p in problems(led_plain, {"A.md": bare},
+                                       stale_days=None, retired=())]
      == ["stale.sha_no_facts"]),
     ("★ stale.sha_no_facts·undeclared_section",
      lambda: [p.code for p in problems(
-         led_plain, {"A.md": "## 5 history\n" + bare}, hist_secs=(""))
+         led_plain, {"A.md": "## 5 history\n" + bare}, hist_secs=(""),
+         stale_days=None, retired=())
      ] == ["stale.sha_no_facts"]),
     ]
 
@@ -330,17 +348,19 @@ def _cases_retired(fx):
     return [
     ("stale.retired_unconfigured",
      lambda: problems(led_plain, {"A.md": "still using the old component\n"},
-                      retired=()) == []),
+                      stale_days=None, retired=()) == []),
     ("stale.retired_reference",
      lambda: problems(led_plain, {"A.md": "see NOTES-osmesa.md and the osmesa-branch\n"},
-                      retired=("osmesa",)) == []),
+                      stale_days=None, retired=("osmesa",)) == []),
     ("★ stale.retired_name",
      lambda: [p.code for p in problems(
-         led_plain, {"A.md": "backend still uses osmesa\n"}, retired=("osmesa",))]
+         led_plain, {"A.md": "backend still uses osmesa\n"},
+         stale_days=None, retired=("osmesa",))]
      == ["stale.retired_name"]),
     ("★ stale.retired_name·unnumbered_section",
      lambda: [p.code for p in problems(
-         led_plain, {"A.md": "## FAQ\nstill using osmesa\n"}, retired=("osmesa",))]
+         led_plain, {"A.md": "## FAQ\nstill using osmesa\n"},
+         stale_days=None, retired=("osmesa",))]
      == ["stale.retired_name"]),
     ]
 
@@ -351,15 +371,15 @@ def _cases_age(fx):
     return [
     # (2) Age check (issue #3 item 2)
     ("stale.age_fresh",
-     lambda: problems(led_fresh, {"A.md": "x\n"}, stale_days=30) == []),
+     lambda: problems(led_fresh, {"A.md": "x\n"}, stale_days=30, retired=()) == []),
     ("stale.age_rule_off",
-     lambda: problems(led_old, {"A.md": "x\n"}, stale_days=None) == []),
+     lambda: problems(led_old, {"A.md": "x\n"}, stale_days=None, retired=()) == []),
     ("★ stale.too_old",
      lambda: [p.code for p in problems(
-         led_old, {"A.md": "x\n"}, stale_days=30)] == ["stale.too_old"]),
+         led_old, {"A.md": "x\n"}, stale_days=30, retired=())] == ["stale.too_old"]),
     ("★ stale.measured_at_missing",
      lambda: [p.code for p in problems(
-         led_plain, {"A.md": "x\n"}, stale_days=30)]
+         led_plain, {"A.md": "x\n"}, stale_days=30, retired=())]
      == ["stale.measured_at_missing"]),
     ]
 
@@ -371,13 +391,16 @@ def _cases_empty(fx):
     # (1) Normal case: no report
     ("stale.ok",
      lambda: problems(led_sha,
-                      {"A.md": "deployed sha256 %s... (truncated)\n" % ("a" * 16)}) == []),
+                      {"A.md": "deployed sha256 %s... (truncated)\n" % ("a" * 16)},
+                      hist_secs=HIST_SECS, stale_days=None, retired=()) == []),
     # (3) Empty input must be reported
     ("★ stale.ledger_empty",
-     lambda: [p.code for p in problems({"facts": {}}, {"A.md": "x\n"})]
+     lambda: [p.code for p in problems({"facts": {}}, {"A.md": "x\n"},
+                                       hist_secs=HIST_SECS, stale_days=None, retired=())]
      == ["stale.ledger_empty"]),
     ("★ stale.no_docs",
-     lambda: [p.code for p in problems(led_plain, {})] == ["stale.no_docs"]),
+     lambda: [p.code for p in problems(led_plain, {},
+                                       hist_secs=HIST_SECS, stale_days=None, retired=())] == ["stale.no_docs"]),
     ]
 
 

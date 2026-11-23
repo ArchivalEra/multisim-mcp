@@ -223,3 +223,11 @@ jobs:
           -s mcp_server/tests
           -p "test_real_ngspice.py"
           -v
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: ShellCheck all repo shell scripts
+        run: |
+          shellcheck tools/wine_worker_bridge.sh deliverables/figures-src/build.sh

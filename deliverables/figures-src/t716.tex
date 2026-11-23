@@ -1,0 +1,89 @@
+\documentclass[border=12pt]{standalone}
+\usepackage[european]{circuitikz}
+\begin{document}
+\begin{tikzpicture}[line width=0.7pt, font=\normalsize,
+  dot/.style={circle, fill, inner sep=1.8pt}]
+
+% 习题 7.16 一位比较器（照 7-14 通过版渲染器，机器几何自证版）
+%   AND₁(A,B̄)→Y₁  AND₂(Ā,B)→Y₂  AND₃(Ā,B̄)  AND₄(A,B)  OR(AND₃,AND₄)→Y₃
+% 源轨全部 x<0（非门框 x=0..1.0 左侧），任何横线都不穿非门框。
+% 每条支线 = 一条从源点到门左沿的连续折线，无短截、无悬空。
+
+% 门宏：只画框/符号/输出，输入由外部折线一次画到框左沿
+\newcommand{\notgate}[2]{% #1 y中心 #2 输出名
+  \begin{scope}[shift={(0,#1-0.4)}]
+    \draw[thick] (0,0) rectangle (1.0,0.8);
+    \node at (0.5,0.4) {1};
+    \draw (1.0,0.4) -- (1.16,0.4);
+    \draw (1.24,0.4) circle (0.07);
+    \draw (1.31,0.4) -- (2.6,0.4);
+    \node[anchor=south] at (2.35,0.92) {#2};
+  \end{scope}}
+\newcommand{\andgate}[2]{% #1 y中心 #2 名
+  \begin{scope}[shift={(4.6,#1-0.5)}]
+    \draw[thick] (0,0) rectangle (1.4,1.0);
+    \node at (0.7,0.5) {\&};
+    \node[anchor=south, font=\footnotesize] at (0.7,1.30) {#2};
+    \draw (1.4,0.5) -- (2.3,0.5);
+  \end{scope}}
+\newcommand{\orgate}[1]{% #1 y中心
+  \begin{scope}[shift={(8.6,#1-0.5)}]
+    \draw[thick] (0,0) rectangle (1.4,1.0);
+    \node at (0.7,0.5) {$\geq$1};
+    \node[anchor=south, font=\footnotesize] at (0.7,1.30) {OR};
+    \draw (1.4,0.5) -- (2.3,0.5);
+  \end{scope}}
+
+% ── 源轨（x<0，端点标名写在轨线上方）──
+\draw (-1.7,9.0) -- (-1.7,0.167);
+\node[anchor=east] at (-1.75,9.35) {A};
+\draw (-2.2,6.0) -- (-2.2,-0.167);
+\node[anchor=east] at (-2.25,6.35) {B};
+
+% ── 非门（输入线从源轨进框左沿 x=0，长 1.7/2.2，不是短截）──
+\notgate{9.0}{$\overline{A}$}
+\notgate{6.0}{$\overline{B}$}
+\draw (-1.7,9.0) -- (0,9.0);
+\draw (-2.2,6.0) -- (0,6.0);
+\node[dot] at (-1.7,9.0) {};
+\node[dot] at (-2.2,6.0) {};
+
+% ── 门 ──
+\andgate{9.0}{AND$_1$}
+\andgate{6.0}{AND$_2$}
+\andgate{3.0}{AND$_3$}
+\andgate{0.0}{AND$_4$}
+\orgate{1.5}{}
+
+% ── 连续折线：每条从源点到门左沿 x=4.6，无悬空 ──
+% A → AND1 上入 9.167
+\draw (-1.7,9.0) -- (-1.4,9.0) -- (-1.4,8.4) -- (4.2,8.4) -- (4.2,9.167) -- (4.6,9.167);
+% A → AND4 上入 0.167（源轨本身到 0.167，直接横出）
+\draw (-1.7,0.167) -- (4.6,0.167);
+% B → AND2 下入 5.833
+\draw (-2.2,6.0) -- (-2.5,6.0) -- (-2.5,5.4) -- (4.0,5.4) -- (4.0,5.833) -- (4.6,5.833);
+% B → AND4 下入 -0.167
+\draw (-2.2,-0.167) -- (4.6,-0.167);
+% Ā（非门出 2.6,9.0）→ AND2 上入 6.167、AND3 上入 3.167
+\draw (2.6,9.0) -- (3.1,9.0) -- (3.1,6.167) -- (4.6,6.167);
+\draw (3.1,6.167) -- (3.1,3.167) -- (4.6,3.167);
+\node[dot] at (3.1,9.0) {};
+% B̄（非门出 2.6,6.0）→ AND1 下入 8.833、AND3 下入 2.833
+\draw (2.6,6.0) -- (3.6,6.0) -- (3.6,8.833) -- (4.6,8.833);
+\draw (3.6,8.833) -- (3.6,2.833) -- (4.6,2.833);
+\node[dot] at (3.6,6.0) {};
+
+% ── AND3/AND4 → OR ──
+\draw (6.9,3.0) -- (7.7,3.0) -- (7.7,1.833) -- (8.6,1.833);
+\draw (6.9,0.0) -- (8.0,0.0) -- (8.0,1.167) -- (8.6,1.167);
+
+% ── 输出 ──
+\draw (6.9,9.0) -- (7.7,9.0);
+\node[anchor=west] at (7.75,9.0) {$Y_1$};
+\draw (6.9,6.0) -- (7.7,6.0);
+\node[anchor=west] at (7.75,6.0) {$Y_2$};
+\draw (10.9,1.5) -- (11.5,1.5);
+\node[anchor=west] at (11.55,1.5) {$Y_3$};
+
+\end{tikzpicture}
+\end{document}

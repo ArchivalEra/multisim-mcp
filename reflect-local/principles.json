@@ -1,0 +1,19 @@
+{
+  "rules": [
+    {
+      "id": "no_requirements_in_git",
+      "text": "requirements/RFP/brief documents are intent, not state: they live in the questions ledger, never as tracked files",
+      "cmd": "python3 reflect-local/goal_multisim_criteria.py no-requirements-in-git"
+    },
+    {
+      "id": "multisim_production_path_only",
+      "text": "every Multisim binary this goal touches is the one production binary the desktop launcher starts (same Wine prefix ~/.multisim143, same multisim.exe); any second prefix or parallel install is a violation",
+      "cmd": "python3 reflect-local/goal_multisim_criteria.py production-path"
+    },
+    {
+      "id": "multisim_no_orthogonal_tests",
+      "text": "every verification goes through multisim-mcp's own COM worker protocol (the production path the MCP frontend uses); a hand-rolled parallel COM client that re-verifies what the MCP stack already exercises is an orthogonal test and forbidden",
+      "cmd": "python3 reflect-local/goal_multisim_criteria.py no-orthogonal"
+    }
+  ]
+}

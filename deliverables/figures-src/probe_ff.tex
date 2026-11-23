@@ -1,0 +1,21 @@
+\documentclass[border=10pt]{standalone}
+\usepackage{ctex}
+\usepackage[european]{circuitikz}
+\begin{document}
+\begin{circuitikz}
+% 1. 测试 flipflop JK 的 dot 引脚和时钟
+% circuitikz 允许对 flipflop 引脚进行定制
+% 例如：flipflop JK, flipflop/clock pos=0.5, 等等
+% 或者 node[flipflop, flipflop def={t1=J, t2=C1, t3=K, t6=Q, t4={\ctikztextnot{Q}}, c2=1, cu2=1, d2=1}]
+\draw (0,0) node[flipflop JK] (ff1) {};
+\draw (4,0) node[flipflop D] (ff2) {};
+
+% 查看 spdt 各种状态
+\draw (0,-3) node[spdt] (sw1) {};
+\draw (3,-3) node[spdt, rotate=180] (sw2) {};
+\draw (6,-3) node[spdt, xscale=-1] (sw3) {};
+
+% 查看 dipchip 标签
+\draw (10,-3) node[dipchip, num pins=16, hide numbers, no marks] (c1) {};
+\end{circuitikz}
+\end{document}

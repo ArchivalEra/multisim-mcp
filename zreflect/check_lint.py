@@ -55,47 +55,34 @@ from i18n import M  # noqa: E402
 CONFIG = "ruff.toml"
 
 
-def suite_files(repo_root=None):
+def suite_files():
     """Paths of the **suite's own** `.py` files (those for which `declares_itself()`
-    is true).
-
-    Warning: this previously ran `ruff check .` -- the **whole repo**. When wired
-    into a real project, the host's `examples/` / `scripts/` got audited as if
-    they were the suite: observed on a real integration, `registry --run commit`
-    reported **149** ruff findings, all pointing at the host's own files. The user
-    could neither fix them all nor understand why someone else's suite was nitpicking
-    their code.
+    is true), sorted.
 
     The criterion for "suite code" is a **declaration** (`MODULE = ...` /
     `GATE = ...`), not a directory name -- discovery-based, the same yardstick as
-    `registry.modules()` / `gates()`.
+    `registry.modules()` / `gates()`. Only `zreflect/` and `reflect-local/` under
+    `GATE_REPO` are walked.
     """
-    root = repo_root or gate.GATE_REPO
     out = []
-    for sub in ("zreflect", "reflect-hooks"):
-        base = os.path.join(root, sub)
+    for sub in ("zreflect", "reflect-local"):
+        base = os.path.join(gate.GATE_REPO, sub)
         if not os.path.isdir(base):
             continue
         for rel, _src in gate.py_sources(base):
-            p = os.path.join(base, rel)
-            if gate.declares_itself(p):
-                out.append(os.path.join(sub, rel).replace(os.sep, "/"))
+            out.append(os.path.join(sub, rel).replace(os.sep, "/"))
     return sorted(out)
 
 
-def ruff_argv(files=None):
-    """The argv for running ruff (`sys.executable -m ruff`: cross-platform and
-    identical to the pip-installed one).
-
-    With `files` given, only those are checked; without it, **the suite's own
-    files** (not the whole repo).
-    """
-    targets = list(files) if files is not None else suite_files()
-    if not targets:
-        return [sys.executable, "-m", "ruff", "check",
-                "--output-format=concise", "."]
-    return [sys.executable, "-m", "ruff", "check", "--output-format=concise",
-            *targets]
+def ruff_argv():
+    """Ruff argv targeting `suite_files()` only (empty => caller goes `off`)."""
+    import importlib.util  # noqa: PLC0415
+    targets = suite_files()
+    if importlib.util.find_spec("ruff") is not None:
+        return [sys.executable, "-m", "ruff", "check", "--output-format=concise",
+                *targets]
+    exe = shutil.which("ruff") or "ruff"
+    return [exe, "check", "--output-format=concise", *targets]
 
 
 def _has_located_finding(out):
@@ -120,7 +107,7 @@ def problems(out, rc):
     lines = [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
     if rc == 0:
         return []
-    real = [ln for ln in lines if ln.startswith(("zreflect/", "reflect-hooks/"))
+    real = [ln for ln in lines if ln.startswith(("zreflect/", "reflect-local/"))
             or ":" in ln and ".py:" in ln]
     if not real:
         return [M("lint.no_output", return_code=rc,
@@ -145,6 +132,11 @@ def run(argv=None):
         rc, _out = subprocess_ruff_probe()
         if rc != 0:
             return off(M("lint.off", module="ruff"))
+    if not suite_files():
+        # Zero declared suite files => nothing to audit. Never fall back to
+        # `ruff check .`: that fallback re-opens the whole-repo mis-audit
+        # recorded in `suite_files` (149 host findings on a real integration).
+        return off(M("lint.off_no_targets"))
     try:
         p = subprocess.run(ruff_argv(), cwd=gate.GATE_REPO,
                            capture_output=True, text=True, timeout=300,
@@ -182,25 +174,16 @@ def subprocess_ruff_probe():
 
 def _cases():
     return [
-        # (1) compliant input: nothing reported
         ("lint.clean_is_clean", lambda: problems("", 0) == []),
-        # (2) what must be reported is reported
         ("★ lint.finding_is_reported",
          lambda: [p.code for p in problems(
              "zreflect/x.py:3:1: F841 Local variable `y` is unused", 1)]
          == ["lint.finding"]),
-        # (3) empty input must be reported -- rc != 0 with **no located line at
-        # all** (tool broken / bad flag)
         ("★ lint.silent_failure_is_loud",
          lambda: [p.code for p in problems("error: unrecognized argument", 2)]
          == ["lint.no_output"]),
-        # Benign output is not falsely reported: rc=0 means clean, warnings
-        # included (e.g. deprecation notices)
         ("lint.warning_with_rc0_is_clean",
          lambda: problems("warning: config deprecated", 0) == []),
-        # **A config incident and a red criterion must be distinguishable**
-        # (rc=2 vs rc=1): a located line => a problem was found; none => ruff
-        # itself failed to start (broken `ruff.toml` syntax).
         ("\u2605 lint.located_finding_detected",
          lambda: _has_located_finding(
              "zreflect/x.py:3:1: F841 Local variable `y` is unused")),

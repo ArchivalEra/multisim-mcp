@@ -1,0 +1,71 @@
+\documentclass[border=10pt]{standalone}
+\usepackage[european]{circuitikz}
+\begin{document}
+\begin{tikzpicture}[line width=0.7pt, font=\normalsize]
+
+% 局部几何：框 (0,0)-(1.9,2.4)
+%   输入行：数据端 2.05、C1 1.2、K 0.4（引脚线一律画到 x=-1.0）
+%   输出行：Q 1.9、Qbar 0.6
+%   通道：左侧 x=-1.6，右侧 x=+3.8，行内下方 y=-1.4
+% 判据：引脚线接到任何通道都必须连续（不留缝）；文字一律在导线之上，通道不穿字
+
+% \ff{x}{y}{子图号}{数据端名}{数据端标注}{K 标注}{D型?}
+%   x,y      : 子图左下角坐标（成对出现）
+%   子图号   : (a)..(f)
+%   数据端名 : J 或 1D
+%   数据端标注/K 标注 : 悬空电平 1/0；\relax = 不标（反馈接入）
+%   D型?     : 0=JK（画 K 端），1=D（无 K 端）
+\newcommand{\ff}[7]{%
+  \begin{scope}[shift={(#1,#2)}]
+    \draw[thick] (0,0) rectangle (1.9,2.4);
+    \node[anchor=south] at (0.95,2.52) {(#3)};
+    % 数据端
+    \node[anchor=west] at (0.12,2.05) {#4};
+    \draw (0,2.05) -- (-1.0,2.05);
+    \ifx\relax#5\relax\else\node[anchor=south] at (-0.55,2.13) {#5};\fi
+    % 时钟端：JK 下降沿（三角外小圆圈），D 型上升沿（无圈）
+    \node[anchor=west] at (0.2,1.2) {C1};
+    \ifnum#7=0
+      \draw (0,1.12) -- (0,1.28) -- (0.07,1.2) -- cycle;
+      \draw (-0.07,1.2) circle (0.07);
+      \draw (-0.14,1.2) -- (-1.0,1.2);
+    \else
+      \draw (0,1.12) -- (0,1.28) -- (0.15,1.2) -- cycle;
+      \draw (0,1.2) -- (-1.0,1.2);
+    \fi
+    % K 端（仅 JK）
+    \ifnum#7=0
+      \node[anchor=west] at (0.12,0.4) {K};
+      \draw (0,0.4) -- (-1.0,0.4);
+      \ifx\relax#6\relax\else\node[anchor=south] at (-0.55,0.48) {#6};\fi
+    \fi
+    % 输出端：Q 引线到 x=2.9；Qbar 引线到气泡 2.45，再延到 2.9
+    \draw (1.9,1.9) -- (2.9,1.9);
+    \node[anchor=south] at (2.35,1.98) {Q};
+    \draw (1.9,0.6) -- (2.38,0.6);
+    \draw (2.45,0.6) circle (0.07);
+    \draw (2.52,0.6) -- (2.9,0.6);
+    \node[anchor=south] at (2.75,0.68) {$\overline{Q}$};
+  \end{scope}
+}
+
+% 把某个输出端引出到右侧通道（x=TAP）：先补连续短段，再沿通道下行
+% #1 子图 x  #2 子图 y  #3 输出行 y(相对)  #4 左通道目标 y(相对子图)  #5 左通道接哪条输入线(绝对 x)
+\newcommand{\fb}[5]{%
+  \draw (#1+2.9,#2+#3) -- (#1+3.8,#2+#3) -- (#1+3.8,#2-1.4) -- (#1-1.6,#2-1.4) -- (#1-1.6,#2+#4) -- (#5,#2+#4);
+}
+
+\ff{0}{0}{a}{J}{1}{1}{0}        % (a) J、K 悬空标 1
+\ff{7.4}{0}{b}{J}{\relax}{1}{0} % (b) J <- 本级 Qbar
+\fb{7.4}{0}{0.6}{2.05}{7.4-1.0}
+\ff{14.8}{0}{c}{J}{1}{\relax}{0} % (c) K <- 本级 Qbar
+\fb{14.8}{0}{0.6}{0.4}{14.8-1.0}
+
+\ff{0}{-6.4}{d}{J}{\relax}{1}{0} % (d) J <- 本级 Q
+\fb{0}{-6.4}{1.9}{2.05}{0-1.0}
+\ff{7.4}{-6.4}{e}{1D}{\relax}{\relax}{1} % (e) D <- 本级 Qbar（T' 接法）
+\fb{7.4}{-6.4}{0.6}{2.05}{7.4-1.0}
+\ff{14.8}{-6.4}{f}{J}{0}{1}{0} % (f) J 标 0，K 悬空标 1
+
+\end{tikzpicture}
+\end{document}

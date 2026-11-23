@@ -1,0 +1,33 @@
+\documentclass[border=10pt]{standalone}
+\usepackage{ctex}
+\usepackage[european]{circuitikz}
+\begin{document}
+\begin{circuitikz}
+% 测试 flipflop 的各种参数
+\draw (0,0) node[flipflop, flipflop def={t1=J, t2={\footnotesize C1}, t3=K, t6=Q, t4={\ctikztextnot{Q}}, c2=1, n2=1}] (ff1) {};
+\node[above] at (ff1.north) {JK test};
+
+\draw (4,0) node[flipflop, flipflop def={t1=1D, t2={\footnotesize C1}, t6=Q, t4={\ctikztextnot{Q}}, c2=1}] (ff2) {};
+\node[above] at (ff2.north) {D test};
+
+% 测试引脚：
+% pin 1 = t1 (J), pin 2 = t2 (C1), pin 3 = t3 (K)
+% pin 6 = t6 (Q), pin 4 = t4 (not Q)
+\draw (ff1.pin 1) -- ++(-1,0) node[left] {in1};
+\draw (ff1.pin 2) -- ++(-1,0) node[left] {clk};
+\draw (ff1.pin 3) -- ++(-1,0) node[left] {in3};
+\draw (ff1.pin 6) -- ++(1,0) node[right] {out6};
+\draw (ff1.pin 4) -- ++(1,0) node[right] {out4};
+
+% 测试 european 门的引脚
+\draw (8,0) node[european nand port, number inputs=3] (nand3) {};
+\draw (nand3.in 1) -- ++(-0.5,0) node[left] {1};
+\draw (nand3.in 2) -- ++(-0.5,0) node[left] {2};
+\draw (nand3.in 3) -- ++(-0.5,0) node[left] {3};
+\draw (nand3.out) -- ++(0.5,0) node[right] {out};
+
+% 测试 spdt 两种状态
+\draw (0,-4) node[spdt] (sw1) {}; % 默认连 out 1 (上) 还是 out 2 (下)?
+\draw (4,-4) node[spdt] (sw2) {};
+\end{circuitikz}
+\end{document}

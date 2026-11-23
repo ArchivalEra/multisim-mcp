@@ -1,0 +1,45 @@
+\documentclass[border=10pt]{standalone}
+\usepackage{ctex}
+\usepackage[european]{circuitikz}
+\begin{document}
+\begin{circuitikz}
+% 1. 逻辑门
+\draw (0,6) node[european not port] (not1) {};
+\node[above] at (not1.north) {not};
+
+\draw (3,6) node[european and port] (and1) {};
+\node[above] at (and1.north) {and};
+
+\draw (6,6) node[european nand port] (nand1) {};
+\node[above] at (nand1.north) {nand};
+
+\draw (9,6) node[european or port] (or1) {};
+\node[above] at (or1.north) {or};
+
+% 2. 多输入门
+\draw (6,4) node[european nand port, number inputs=3] (nand3) {};
+\node[above] at (nand3.north) {nand 3-in};
+
+% 3. 触发器 flipflops
+\draw (0,2) node[flipflop JK] (jk) {};
+\node[above] at (jk.north) {flipflop JK};
+
+\draw (4,2) node[flipflop D] (dff) {};
+\node[above] at (dff.north) {flipflop D};
+
+% 4. 开关与灯与电源
+\draw (0,-1) to[sinusoidal voltage source, l=$\sim$220V] (0,-3);
+\draw (3,-2) node[spdt] (sw) {};
+\node[above] at (sw.north) {spdt};
+
+\draw (6,-2) node[lamp] (la) {};
+\node[above] at (la.north) {lamp};
+
+\draw (9,-2) to[lamp, l=$Y$] (11,-2);
+
+% dipchip / chip
+\draw (0,-7) node[dipchip, num pins=16, hide numbers, no marks] (c16) {};
+\node[above] at (c16.north) {dipchip};
+
+\end{circuitikz}
+\end{document}

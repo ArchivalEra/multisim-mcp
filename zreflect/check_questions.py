@@ -10,6 +10,19 @@ Rules and rationale:
 
   - `Settling:` must be a **repo-relative path** or a directly runnable command;
     never "see some note" -- a settler pointing at prose is no settler at all.
+  - **A `Settling:` must be a command, not a claim** (issue #36): "根目录文件数=18"
+    inside the prose is invisible to this gate -- it judges the first token
+    (a path must exist) and the two-outcome shape, nothing else. Prose
+    describing the expected state is a claim no criterion can verify; the
+    ticket's settler must BE the verifier (rc-decidable).
+  - **A whitelist is not a claim's coverage** (issue #36, four specimen classes
+    of half-a-criterion): (1) a whitelist lists fewer items than the claim --
+    the gate green-lights the delta; (2)/(3) a ported criterion missing its
+    predicate body or its case registration silently half-runs; (4) a filter
+    emptying the input set runs, passes, and checks nothing. If a gate does
+    not cover a claimed surface it must **say so** (off_is_visible: not
+    applicable must be stated, not silent) -- and a coverage declaration
+    itself needs a judgment, or the silence just moved into the declaration.
   - The two outcomes must yield **different exit codes / distinguishable output**,
     otherwise the settler can falsify nothing.
   - **A question whose settler does not exist yet is a legal question** -- in that
@@ -31,8 +44,11 @@ import knobs  # noqa: E402
 from gate import fatal, finish, main_selftest_or, meta  # noqa: E402
 from i18n import M  # noqa: E402
 
-VALID_STATUS = ("needs-triage", "needs-info", "ready-for-agent",
-                "ready-for-human", "wontfix", "resolved")
+VALID_STATUS = ("ready-for-agent", "ready-for-human", "resolved")
+# Terminal states: once a question carries one of these, consumers stop listing
+# it as pending. **Single origin** (issue #38): consumers import
+# CLOSED_STATUS / is_resolved; nobody re-lists the states.
+CLOSED_STATUS = ("resolved",)
 # Domain words that must appear in a question body (vocabulary of the convention
 # docs -- data, not user-visible messages, hence **not** in the language pack).
 # Assembled from code points: this file sits inside check_i18n's scan surface, so
@@ -47,20 +63,24 @@ NONE_LIKE = (_NOT_EXISTS, "none", "None", "n/a", "N/A")
 PATHISH = (".py", ".sh", ".mjs", ".js", ".md", "/")
 
 
+_NONE_RE = re.compile(
+    r"(?i)^(?:%s)(?:\s|$|--|—)" % "|".join(re.escape(w) for w in NONE_LIKE)
+)
+
+
+def _is_none_like(sv):
+    return bool(_NONE_RE.match((sv or "").strip()))
+
+
+def _field_count(text, name):
+    pat = re.compile(r"(?i)^\*{0,2}%s\*{0,2}\s*:\s*\*{0,2}\s*(.*?)\s*$" % re.escape(name))
+    return sum(1 for ln in text.splitlines() if pat.match(ln))
+
+
 def field(text, name):
     """Read `**Name:** value` / `**Name**: value` / `Name: value` (three spellings;
     anchored at line start, first match wins).
-
-    Warning: this was bitten once -- the regex was written as
-    `\\*{0,2}Name\\*{0,2}\\s*:`, which cannot match `**Status:**` (the real order is
-    `**` + `Status` + `:` + `**`; the colon sits **between** the pair of asterisks).
-    Every field then read as None, and the gate reported "missing field" even for
-    compliant questions. **A pair of asterisks after the colon must also be allowed.**
     """
-    # The value supports **continuation lines** (issue #15 B1): if the next line
-    # does not start with `**X:**` / `X:`, it is folded into this field. The same
-    # shape bit downstream twice (a wrapped Settling => the rc= criterion landed on
-    # the second line => false "no distinguishable pair of outcomes").
     lines = text.splitlines()
     for i, ln in enumerate(lines):
         m = re.match(r"(?i)^\*{0,2}%s\*{0,2}\s*:\s*\*{0,2}\s*(.*?)\s*$"
@@ -69,7 +89,7 @@ def field(text, name):
             continue
         val = [m.group(1).strip()]
         for nxt in lines[i + 1:]:
-            if re.match(r"^\s*(?:\*\*)?[A-Za-z][A-Za-z0-9_-]*(?:\*\*)?\s*:", nxt):
+            if re.match(r"^\s*(?:\*\*)?(?!https?:)[A-Za-z][A-Za-z0-9_-]*(?:\*\*)?\s*:", nxt):
                 break                    # next field starts
             if nxt.strip():
                 val.append(nxt.strip())
@@ -81,29 +101,26 @@ def status_of(text):
     """The **normalized** `Status` value (lowercased, first word) -- the single
     yardstick for "is this question closed".
 
-    Warning: "is it closed?" previously had **three** implementations, two of them
-    in live code:
-      - `_status_problems` took the first word without lowercasing (`Resolved`
-        was reported as bad_status);
-      - `run()` compared the whole field (`**Status:** resolved` followed by prose
-        => always "unresolved"; observed in this repo: after 01-example.md was
-        closed, `questions.ok(open=1)` still counted it as open);
-      - `next._question_status` had yet another copy (the R-017 `"** resolved"`).
-
-    One question, three answers -- the gate disagreed with itself. Normalization
-    has exactly this one origin; `field()`'s **continuation-line semantics** (there
-    for Settling) are truncated here -- Status is one word.
+    `field()`'s continuation-line semantics (there for Settling) are truncated
+    here: Status is one word. Callers must use this origin, never re-normalize.
     """
     raw = (field(text, "Status") or "").strip().lower()
     return raw.split()[0] if raw else ""
 
 
 def is_resolved(text):
-    return status_of(text) == "resolved"
+    """Terminal-state check (`CLOSED_STATUS` single origin).
+
+    `resolved` is the sole legal terminal state (`CLOSED_STATUS` member); callers
+    ask via `is_resolved`, never by re-listing states.
+    """
+    return status_of(text) in CLOSED_STATUS
 
 
 def _status_problems(name, text):
-    """`Status` field: must exist and be a known value (yardstick: `status_of`)."""
+    """`Status` field: must exist, be unique, and be a known value."""
+    if _field_count(text, "Status") > 1:
+        return [M("questions.duplicate_field", name=name, field="Status")]
     st = status_of(text)
     if not st:
         return [M("questions.missing_status", name=name)]
@@ -117,119 +134,315 @@ def _none_like_problems(name, sv):
     """`Settling` declared "none" (e.g. None): must **also** name the first
     deliverable.
 
-    Warning: both spellings of "first deliverable" are accepted -- the one with the
-    measure word and the one without. The convention doc spells it with the measure
-    word; had the checker only accepted the shorter form, **compliant questions
-    would be judged non-compliant** (observed in this repo: of 15 tickets, the one
-    using the natural word order was reported by its own gate as "first
-    deliverable not stated").
+    Both spellings of "first deliverable" are accepted -- the one with the
+    measure word and the one without.
     """
     if _FIRST_DELIVERABLE in sv.replace(_PARTICLE, ""):
         return []
     return [M("questions.none_without_first_deliverable", name=name)]
 
 
-def _settling_problems(name, text, chk):
-    """`Settling` field: exists / two distinguishable outcomes / settler actually runs."""
-    sv = field(text, "Settling")
-    if not sv:
-        return [M("questions.missing_settling", name=name)]
-    if sv.startswith(NONE_LIKE):
-        return _none_like_problems(name, sv)
+def _settling_cmd(sv):
+    cmd = gate._OUTCOME_SEP.split(sv, 1)[0].strip()
+    if cmd.startswith("`") and cmd.endswith("`") and len(cmd) >= 2:
+        cmd = cmd[1:-1].strip()
+    return cmd
+
+
+def _missing_settler_path(cmd, chk):
+    import shlex  # noqa: PLC0415
+    try:
+        tokens = shlex.split(cmd)
+    except ValueError:
+        tokens = cmd.split()
+    skip_next = False
+    for raw_tok in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        tok = raw_tok.strip("`\"'")
+        if tok in ("-c", "-m"):
+            skip_next = True
+            continue
+        if tok.startswith("-") or "://" in tok:
+            continue
+        if any(tok.endswith(x) or x in tok for x in PATHISH) and not chk(tok):
+            return tok
+    return None
+
+
+def _check_settler_exec(name, sv, chk):
     out = []
     if not any(t in sv for t in ("rc=", "\u21d2", "=>")):
         out.append(M("questions.no_distinct_outcomes", name=name))
-    tok = sv.split()[0].strip("`")
-    if any(tok.endswith(x) or x in tok for x in PATHISH) and not chk(tok):
-        out.append(M("questions.settler_missing", name=name, target=tok))
+    cmd = _settling_cmd(sv)
+    bad_tok = _missing_settler_path(cmd, chk)
+    if bad_tok:
+        out.append(M("questions.settler_missing", name=name, target=bad_tok))
+    return out + gate.prose_in_exec_problems(name, "Settling", sv)
+
+
+def _settling_problems(name, text, chk, runner=None, verify_resolved=False, cache=None):
+    """`Settling` field: exists / unique / two distinguishable outcomes / settler actually runs."""
+    if _field_count(text, "Settling") > 1:
+        return [M("questions.duplicate_field", name=name, field="Settling")]
+    sv = field(text, "Settling")
+    if not sv:
+        return [M("questions.missing_settling", name=name)]
+    st = status_of(text)
+    if _is_none_like(sv):
+        if st == "resolved":
+            return [M("questions.resolved_cannot_be_none", name=name)]
+        return _none_like_problems(name, sv)
+    out = _check_settler_exec(name, sv, chk)
+    if out or st != "resolved" or not (verify_resolved or runner is not None):
+        return out
+    cmd = _settling_cmd(sv)
+    rc, cmd_out = _run_cached(cmd, runner, cache)
+    if rc != 0:
+        out.append(_settler_failed(name, cmd, rc, cmd_out))
     return out
 
 
-def problems(files, exists=None):
-    """Return the problem list (pure function: the selftest needs that).
-    `files` = {filename: body}.
+def _parallel_problems(name, text):
+    if _field_count(text, "Parallel") > 1:
+        return [M("questions.duplicate_field", name=name, field="Parallel")]
+    raw = field(text, "Parallel")
+    if raw is None:
+        return []
+    val = raw.strip().lower()
+    if val not in ("true", "false"):
+        return [M("questions.bad_parallel", name=name, actual=raw)]
+    return []
 
-    `exists` is injectable (for test fixtures) -- by default it checks whether a
-    repo-root-relative path exists.
 
-    Each field has its own named helpers (Status / Settling): they judge different
-    fields, and `Settling` has three mutually exclusive branches (missing /
-    declared-none / has a command); when they were crammed together, the call
-    site's `continue` turned "which branch was handled" into implicit state.
-    """
+def is_parallel(text):
+    """Whether a question explicitly opts into parallel settler replay (`Parallel: true`)."""
+    raw = field(text, "Parallel")
+    return (raw or "").strip().lower() == "true"
+
+
+def _split_and_chain(cmd):
+    parts: list[str] = []
+    buf: list[str] = []
+    quote = ""
+    i = 0
+    while i < len(cmd):
+        ch = cmd[i]
+        if ch in ("'", '"') and (not quote or quote == ch):
+            quote = "" if quote else ch
+        if not quote and cmd[i:i + 2] == "&&":
+            parts.append("".join(buf).strip())
+            buf, i = [], i + 2
+            continue
+        buf.append(ch)
+        i += 1
+    parts.append("".join(buf).strip())
+    if len(parts) <= 1 or any(not p for p in parts):
+        return [cmd]
+    unsafe = ("cd ", "export ", "unset ")
+    if any(p.startswith(unsafe) or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", p) for p in parts):
+        return [cmd]
+    return parts
+
+
+def _run_one_cached(sub, runner, cache, cache_lock):
+    if cache_lock is not None:
+        with cache_lock:
+            if sub in cache:
+                return cache[sub]
+    elif cache is not None and sub in cache:
+        return cache[sub]
+    res = gate.run_cmd_cached(sub)
+    if cache is not None:
+        if cache_lock is not None:
+            with cache_lock:
+                cache[sub] = res
+        else:
+            cache[sub] = res
+    return res
+
+
+def _run_cached(cmd, runner, cache, cache_lock=None):
+    if runner is not None:
+        return runner(cmd)
+    last = (0, "")
+    for sub in _split_and_chain(cmd):
+        last = _run_one_cached(sub, runner, cache, cache_lock)
+        if last[0] != 0:
+            return last
+    return last
+
+
+def _verify_set(verify_resolved, files):
+    if isinstance(verify_resolved, (set, frozenset, list, tuple)):
+        return set(verify_resolved)
+    return set(files) if verify_resolved else set()
+
+
+def _settler_failed(name, cmd, rc, out):
+    lines = [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
+    detail = lines[-1][:120] if lines else ""
+    return M("questions.resolved_settler_failed", name=name, rc=str(rc),
+             cmd=cmd[:60], detail=detail)
+
+
+def _check_one_question(name, text, chk, runner, verify, cache, cache_lock):
+    out = _status_problems(name, text) + _parallel_problems(name, text)
+    if out or not verify:
+        return out + _settling_problems(name, text, chk, runner=runner, verify_resolved=False, cache=cache)
+    sv = field(text, "Settling")
+    if not sv or _is_none_like(sv) or status_of(text) != "resolved":
+        return _settling_problems(name, text, chk, runner=runner, verify_resolved=False, cache=cache)
+    pre = _check_settler_exec(name, sv, chk)
+    if pre:
+        return pre
+    cmd = _settling_cmd(sv)
+    rc, cmd_out = _run_cached(cmd, runner, cache, cache_lock)
+    if rc != 0:
+        return [_settler_failed(name, cmd, rc, cmd_out)]
+    return []
+
+
+def problems(files, exists=None, runner=None, verify_resolved=False):
+    """Return the problem list (pure function: the selftest needs that)."""
+    import concurrent.futures  # noqa: PLC0415
+    import threading  # noqa: PLC0415
     if not files:
-        # Zero-value guard: no questions received at all => "no question lacks a
-        # settler" is vacuously true and says nothing.
         return [M("questions.empty")]
     chk = exists or (lambda p: os.path.exists(os.path.join(gate.GATE_REPO, p)))
+    targets = _verify_set(verify_resolved, files)
+    cache: dict[str, tuple[int | None, str]] = {}
+    cache_lock = threading.Lock()
+    ordered = sorted(files.items())
+    par_items = [(n, t) for n, t in ordered if is_parallel(t) and runner is None and n in targets]
+    par_results: dict[str, list] = {}
+    if par_items:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(par_items))) as pool:
+            futs = {
+                n: pool.submit(_check_one_question, n, t, chk, runner, True, cache, cache_lock)
+                for n, t in par_items
+            }
+            for n, fut in futs.items():
+                par_results[n] = fut.result()
     out = []
-    for name, text in sorted(files.items()):
-        out += _status_problems(name, text)
-        out += _settling_problems(name, text, chk)
+    for name, text in ordered:
+        if name in par_results:
+            out += par_results[name]
+        else:
+            out += _check_one_question(name, text, chk, runner, name in targets, cache, cache_lock)
     return out
 
 
-def collect(d=None):
-    # The directory name is configurable (issue #1, item 2): default questions/,
-    # overridable via REFLECT_QUESTIONS.
-    # Warning: the value goes through `knobs.questions_dir()` (single origin, and
-    # it strips) -- previously this spot did not strip, so `REFLECT_QUESTIONS=`
-    # (empty string = unset) made the **repo root** the question directory,
-    # sweeping STATE.md / README.md in and reporting fake problems (observed).
-    # An explicit `d` (selftest injects a fake directory name) => assemble it
-    # here; otherwise go through the single origin.
+def _replay_depth():
+    return gate.trusted_replay_depth()
+
+
+def _resolved_targets_to_verify(_qdir, files, _all_resolved, depth=0):
+    targets = {k for k, v in files.items() if status_of(v) == "resolved"}
+    if depth <= 0:
+        return targets
+    reentrant: tuple[str, ...] = ("check_questions.py", "registry.py --run", "harness.py")
+    if depth >= 2:
+        reentrant += ("check_retractions.py",)
+    return {k for k in targets if not any(tok in _settling_cmd(field(files[k], "Settling") or "") for tok in reentrant)}
+
+
+def sort_key(name):
+    """Numeric-prefix sort key so `100-foo.md` sorts after `99-bar.md`."""
+    base = os.path.basename(name)
+    m = re.match(r"^(\d+)(.*)$", base)
+    return (0, int(m.group(1)), m.group(2)) if m else (1, 0, base)
+
+
+def collect(d=None, root=None):
+    # The directory name is configurable via `knobs.questions_dir()`.
     d = d or knobs.questions_dir()
-    root = os.path.join(gate.GATE_REPO, d)
+    base = os.path.join(root or gate.GATE_REPO, d)
     files = {}
-    if os.path.isdir(root):
-        for f in sorted(os.listdir(root)):
+    if os.path.isdir(base):
+        for f in sorted(os.listdir(base), key=sort_key):
             if f.endswith(".md"):
-                files["%s/%s" % (d, f)] = open(os.path.join(root, f), encoding="utf-8",
+                files["%s/%s" % (d, f)] = open(os.path.join(base, f), encoding="utf-8",
                                                errors="replace").read()
     return files
 
 
 def run(argv):
-    files = collect(argv[0] if argv else None)
+    depth = _replay_depth()
+    if depth < 0 or depth >= 3:
+        return fatal(M("replay.too_deep", depth=depth, limit=3))
+    all_res = "--all-resolved" in argv
+    pos = [a for a in argv if a != "--all-resolved"]
+    qdir = pos[0] if pos else knobs.questions_dir()
+    files = collect(pos[0] if pos else None)
     if not files:
-        # The rc-flavored zero-value guard (`guard_nonempty` in gate.py emits free
-        # text -- after this gate went zero-language it emits M() itself; the rc
-        # contract is unchanged, still 2).
         return fatal(M("questions.guard_empty", count=0))
-    probs = problems(files)
+    import trust  # noqa: PLC0415
+    targets = _resolved_targets_to_verify(qdir, files, all_res, depth=depth)
+    probs = gate.with_run_cache(lambda: problems(files, verify_resolved=targets))
+    probs += trust.check_questions_against_anchor(files, qdir=qdir)
     n_open = sum(1 for t in files.values() if not is_resolved(t))
     return finish(M("questions.title"), probs,
                   M("questions.ok", count=len(files), open=n_open))
 
 
-def _q(status="ready-for-agent", settling="zreflect/facts.py — rc=0 ⇒ stands; rc=2 ⇒ did not catch it"):
+def _q(status="ready-for-agent",
+       settling="python3 zreflect/facts.py --selftest -- rc=0 => stands; rc=2 => did not catch it"):
     return "# 01: sample\n\n**Status:** %s\n\n**Settling:** %s\n" % (status, settling)
 
 
 def _cases():
     ok = {"questions/01.md": _q()}
     return [
-        # (1) compliant input: nothing reported
         ("questions.ok",
          lambda: problems(ok, exists=lambda p: True) == []),
+        ("questions.numeric_sort_beyond_two_digits",
+         lambda: sorted(["100-z.md", "20-a.md", "09-b.md"], key=sort_key)
+         == ["09-b.md", "20-a.md", "100-z.md"]),
         ("questions.none_first_deliverable",
          lambda: problems({"questions/02.md": _q(
-             settling=_NOT_EXISTS + " — the " + _FIRST_DELIVERABLE + " is to build it")},
+             settling=_NOT_EXISTS + " -- the " + _FIRST_DELIVERABLE + " is to build it")},
              exists=lambda p: False) == []),
         ("questions.resolved_also_compliant", lambda: problems(
-            {"questions/03.md": _q(status="resolved")}, exists=lambda p: True) == []),
-        # (2) what must be reported is reported
+            {"questions/03.md": _q(status="resolved")}, exists=lambda p: True,
+            runner=lambda _c: (0, "ok")) == []),
+        ("★ questions.resolved_cannot_be_none", lambda: [p.code for p in problems(
+            {"questions/10.md": _q(status="resolved", settling=_NOT_EXISTS + " -- " + _FIRST_DELIVERABLE)},
+            exists=lambda p: False)] == ["questions.resolved_cannot_be_none"]),
+        ("★ questions.resolved_settler_failed", lambda: [p.code for p in problems(
+            {"questions/11.md": _q(status="resolved")}, exists=lambda p: True,
+            runner=lambda _c: (1, "fail"))] == ["questions.resolved_settler_failed"]),
+        ("★ questions.wontfix_and_needs_triage_rejected", lambda:
+            [p.code for p in problems({"questions/09.md": _q(status="wontfix")}, exists=lambda p: True)] == ["questions.bad_status"]
+            and [p.code for p in problems({"questions/12.md": _q(status="needs-triage")}, exists=lambda p: True)] == ["questions.bad_status"]),
+        ("★ questions.depth_one_still_verifies_non_self", lambda: (
+            "questions/03.md" in _resolved_targets_to_verify("questions", {"questions/03.md": _q(status="resolved")}, False, depth=1)
+            and "questions/04.md" not in _resolved_targets_to_verify(
+                "questions",
+                {"questions/04.md": _q(status="resolved", settling="python3 zreflect/check_questions.py -- rc=0 => ok; rc=1 => bad")},
+                False, depth=1))),
+        ("★ questions.closed_status_table", lambda:
+            is_resolved(_q(status="resolved")) is True
+            and is_resolved(_q(status="ready-for-human")) is False
+            and is_resolved(_q(status="ready-for-agent")) is False),
         ("★ questions.missing_settling",
          lambda: [p.code for p in problems(
              {"questions/04.md": _q(settling="")}, exists=lambda p: True)]
          == ["questions.missing_settling"]),
-        ("★ questions.settler_missing",
-         lambda: [p.code for p in problems(ok, exists=lambda p: False)]
-         == ["questions.settler_missing"]),
-        ("★ questions.no_distinct_outcomes",
+        ("\u2605 questions.settler_missing",
+         lambda: [p.code for p in problems(
+             {"questions/08.md": _q(settling="zreflect/nope.py -- rc=0 => a; rc=2 => b")},
+             exists=lambda p: False)]
+         == ["questions.settler_missing", "criteria.exec_position_is_prose"]),
+        ("\u2605 questions.settler_is_not_a_command",
+         lambda: [p.code for p in problems(
+             {"questions/09.md": _q(settling="zreflect/facts.py -- rc=0 => a; rc=2 => b")})]
+         == ["criteria.exec_position_is_prose"]),
+        ("\u2605 questions.no_distinct_outcomes",
          lambda: [p.code for p in problems(
              {"questions/05.md": _q(settling="run it")}, exists=lambda p: True)]
-         == ["questions.no_distinct_outcomes"]),
+         == ["questions.no_distinct_outcomes", "criteria.exec_position_is_prose"]),
         ("★ questions.bad_status",
          lambda: [p.code for p in problems(
              {"questions/06.md": _q(status="whatever")}, exists=lambda p: True)]
@@ -238,18 +451,23 @@ def _cases():
          lambda: [p.code for p in problems(
              {"questions/08.md": _q(settling=_NOT_EXISTS)}, exists=lambda p: False)]
          == ["questions.none_without_first_deliverable"]),
-        ("★ questions.missing_status",
+        ("\u2605 questions.missing_status",
          lambda: [p.code for p in problems(
-             {"questions/07.md": "**Settling:** x.py —— rc=0 ⇒ a；rc=1 ⇒ b"},
+             {"questions/07.md": "**Settling:** python3 x.py ---- rc=0 => a; rc=1 => b"},
              exists=lambda p: True)] == ["questions.missing_status"]),
-        # (2) UX (issue #15 B1): a wrapped Settling must still yield the full criterion
         ("questions.settling_wrapped",
-         lambda: "rc=7" in (field("**Status:** x\n**Settling:** run:\nrc=0 ⇒ A；"
-                                 "rc=7 ⇒ B\n", "Settling") or "")),
-        # (3) empty input must be reported
+         lambda: "rc=7" in (field("**Status:** x\n**Settling:** run:\nrc=0 => A；"
+                                 "rc=7 => B\n", "Settling") or "")),
         ("★ questions.empty",
          lambda: [p.code for p in problems({}, exists=lambda p: True)]
          == ["questions.empty"]),
+        ("★ questions.bad_parallel_rejected",
+         lambda: [p.code for p in problems(
+             {"questions/13.md": _q() + "**Parallel:** maybe\n"}, exists=lambda p: True)]
+         == ["questions.bad_parallel"]),
+        ("questions.parallel_and_and_chain_split",
+         lambda: is_parallel(_q() + "**Parallel:** true\n")
+         and _split_and_chain("python3 a.py && python3 b.py") == ["python3 a.py", "python3 b.py"]),
     ]
 
 

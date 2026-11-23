@@ -67,6 +67,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gate  # noqa: E402
+import knobs  # noqa: E402
 from gate import fatal, finish, main_selftest_or, meta  # noqa: E402
 from i18n import M  # noqa: E402
 
@@ -103,13 +104,6 @@ def _module_level_assigns(tree):
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             out.add(node.target.id)
     return out
-
-
-def _aliases_of(trees, src_mod):
-    """Aliases bound by `import <src_mod> as <alias>` in the scan surface (used by `_reassigned_elsewhere`)."""
-    return {a.asname for tree in trees.values()
-            for node in ast.walk(tree) if isinstance(node, ast.Import)
-            for a in node.names if a.name == src_mod and a.asname}
 
 
 def _import_aliases(trees):
@@ -157,31 +151,49 @@ def _module_global_mutations(tree, module):
     return out
 
 
+_MUTATING_METHODS = frozenset({
+    "append", "extend", "insert", "pop", "clear", "update",
+    "setdefault", "add", "remove", "discard", "sort", "reverse",
+})
+
+
+def _root_target(node, module, aliases):
+    cur = node
+    while isinstance(cur, ast.Subscript):
+        cur = cur.value
+    if isinstance(cur, ast.Attribute) and isinstance(cur.value, ast.Name):
+        return (aliases.get(cur.value.id, cur.value.id), cur.attr)
+    if isinstance(cur, ast.Name):
+        return (module, cur.id)
+    return None
+
+
+def _inplace_mutations(tree, module, aliases):
+    """Shape 3: `DICT[k] = v`, `del DICT[k]`, or `LIST.append(...)` / `.update(...)`."""
+    out = set()
+    for node in ast.walk(tree):
+        targets = node.targets if isinstance(node, ast.Delete) else _assign_targets(node)
+        for t in targets:
+            if isinstance(t, ast.Subscript):
+                pair = _root_target(t, module, aliases)
+                if pair is not None:
+                    out.add(pair)
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in _MUTATING_METHODS):
+            pair = _root_target(node.func.value, module, aliases)
+            if pair is not None:
+                out.add(pair)
+    return out
+
+
 def _mutated_globals(trees):
-    """One-time index: which `(module, name)` pairs get assigned by others at runtime.
-
-    ⚠️ Previously `_reassigned_elsewhere(trees, src_mod, name)` re-ran
-    `ast.walk` over all modules **for every candidate name** -- 115 names x
-    28 modules' ASTs => 6.3 seconds (measured: 97% of the gate's total 6.5s).
-    Build the index once; lookups are O(1).
-
-    The key shape of the criterion: not "how many times the source module
-    itself assigns it" (`gate.GATE_REPO` is assigned once), but "**will others
-    reassign it**" -- the self-proofs of `check_envfile` / `i18n` both do
-    `gate.GATE_REPO = ...`. A constant assigned once and rewritten by nobody
-    (`REGISTRY`) is not reported -- its semantics is "a data table", where
-    copy and reference are indistinguishable.
-
-    Each shape gets a named helper (cross-module attribute assignment /
-    within-module global rewrite): merged into one function, the two nesting
-    levels plus isinstance branches over three statement kinds pushed
-    complexity to 15.
-    """
+    """Index the `(module, name)` pairs that others assign or mutate in-place at runtime."""
     aliases = _import_aliases(trees)
     out = set()
     for module, tree in trees.items():
         out |= _attribute_mutations(tree, aliases)
         out |= _module_global_mutations(tree, module)
+        out |= _inplace_mutations(tree, module, aliases)
     return out
 
 
@@ -194,22 +206,12 @@ def _globals_of(tree):
     return out
 
 
-def _uses_global(tree, name):
-    """Does this module declare `global <name>`? (name=None => any global at all)."""
-    g = _globals_of(tree)
-    return bool(g) if name is None else name in g
-
-
 def _functions_reading(src_tree, name):
-    """Top-level function names in `src_mod` that (transitively) read `name`.
+    """Top-level function names in `src_mod` that transitively read `name`.
 
-    Derived snapshots often appear through a wrapper: `OUT = repo(LEDGER_NAME)`
-    -- the expression text contains no `gate.GATE_REPO`, but the body of
-    `repo()` does. Looking only one hop misses **two hops**: `def a(): return
-    repo(x)` followed by `OUT = a()` (measured: []).
-    So this computes a **closure**: repeatedly add "functions that call a known
-    reader" to the reader set until a fixed point. At zreflect's scale of 28
-    modules, a few rounds suffice.
+    The reader set is a fixed point: a function that directly loads `name`, or
+    whose calls include a known reader, is added until no more appear. This
+    catches wrappers such as `OUT = a()` where `a()` calls `repo()`.
     """
     defs = {}
     for node in src_tree.body:
@@ -238,7 +240,7 @@ def _calls_outside_lambda(node):
     is itself a Call -- walking only children misses it (measured: derived
     detection completely dead).
     """
-    out = []
+    out: list[ast.Call] = []
     def walk(n):
         if isinstance(n, ast.Call):
             out.append(n)
@@ -263,21 +265,13 @@ def _call_graph(tree):
 
 
 def _reaches(node, readers, graph):
-    """Can this expression reach a function in `readers`, directly or via this module's top-level functions?
+    """Can this expression reach a function in `readers`?
 
-    ⚠️ Reachability uses the prebuilt call graph (`graph`) + an explicit stack:
-    **no recursion, no repeated walk**. The previous version ran `ast.walk`
-    over the whole function body per derived node and recursed -- mutually
-    recursive functions hung it outright (measured: the real repo's 28 modules
-    never returned within the 60s timeout).
-
-    Two false-positive guards (both previously produced false reds, measured):
-      - a same-named function defined in this module does not count as a
-        reader of the source module (shadowing) -- it is still followed along
-        the call graph (it may itself forward to repo)
-      - attribute calls (`tools.repo(...)`) do not count --
-        `getattr(...,"attr")` would match same-named functions of any module,
-        which is not this module's repo
+    Follows bare-name calls through the prebuilt call `graph` with an explicit
+    stack and a `seen` set (no recursion, no repeated AST walk). Lambda bodies
+    are skipped: their calls are lazy. A same-named local function shadows a
+    reader but is still followed through the graph; attribute calls
+    (`tools.repo(...)`) do not count.
     """
     # ⚠️ **Do not enter lambda bodies**: calls inside
     # `CASES = [("label", lambda: check_doc(..., repo(...)))]` are **executed
@@ -328,15 +322,11 @@ def _target_names(node):
 
 
 def _module_level_derivations(tree, src_mod, name, readers=(), graph=None):
-    """Does the module top level contain `OTHER = <expression mentioning src_mod.name>`? That is **the same class of snapshot**.
+    """Names assigned at module top level whose value mentions `src_mod.name` or
+    reaches a reader through the call graph.
 
-    Both spellings freeze at the moment of import:
-        from gate import GATE_REPO      # value copy
-        OUT = repo(LEDGER_NAME)        # repo() internally reads gate.GATE_REPO => frozen into a string
-
-    Catching only the first misses the second -- and the second is the one
-    actually present in this repo (`facts.py:35`; measured: after changing
-    `gate.GATE_REPO`, `facts.OUT` still held the old path).
+    Both `from gate import GATE_REPO` and `OUT = repo(NAME)` freeze at import;
+    the second is detected via `_reaches`. Returns target names, one per hit.
     """
     marker = "%s.%s" % (src_mod, name)
     hits = []
@@ -411,51 +401,51 @@ def _derived_hits(ix, mod, tree, src_mod, names):
 
 def _derived_copy_problems(ix):
     """2. **Derived snapshots**: the module top level stores "an expression containing a mutable global" as a constant (freezes just like an import)."""
-    out = []
+    out: list[str] = []
     for mod, tree in sorted(ix["trees"].items()):
         for src_mod, names in sorted(ix["assigned"].items()):
             out += _derived_hits(ix, mod, tree, src_mod, names)
     return out
 
 
+def _import_source_module(node):
+    if not node.module:
+        return None
+    return node.module.split(".")[-1] if node.level > 0 else node.module
+
+
 def _mutable_copy_problems(ix):
     """1. **Value snapshots**: `from <local module> import ALL_CAPS` where that global is reassigned elsewhere => the copy stays frozen at import time."""
-    out = []
+    out: list[str] = []
     for mod, tree in sorted(ix["trees"].items()):
         for node in ast.walk(tree):
             if not isinstance(node, ast.ImportFrom):
                 continue
-            for name in _frozen_imports(ix, mod, node):
+            src_mod = _import_source_module(node)
+            for name in _frozen_imports(ix, mod, node, src_mod):
                 out.append(M("snapshot.mutable_copy",
                              file=mod + ".py", imported=name,
-                             source=node.module))
+                             source=src_mod))
     return out
 
 
-def _frozen_imports(ix, mod, node):
-    """Which names in this `from <src> import ...` are **value snapshots** (the copy freezes).
-
-    The five guards are all "not worth reporting" exits, each for a different
-    reason -- crammed at the call site they become 5 consecutive `continue`s
-    (complexity 11). Extracted into a named function, the call site is one line.
-    """
-    src_mod = node.module
-    if src_mod not in ix["trees"]:
-        return []                       # not in the scan surface => not a local sibling module
-    if src_mod not in ix["assigned"]:
-        return []                       # source module outside the scan surface => do not guess
+def _frozen_imports(ix, mod, node, src_mod=None):
+    """Which names in this `from <src> import ...` are **value snapshots** (the copy freezes)."""
+    src_mod = _import_source_module(node) if src_mod is None else src_mod
+    if src_mod not in ix["trees"] or src_mod not in ix["assigned"]:
+        return []
     loaded = ix["loaded"][mod]
-    out = []
+    out: list[str] = []
     for alias in node.names:
+        if alias.name == "*":
+            out.extend(n for n in sorted(ix["assigned"][src_mod])
+                       if (src_mod, n) in ix["mutable"])
+            continue
         name = alias.name
-        if name != name.upper():
-            continue                    # functions / classes / lowercase names are not "value snapshots"
-        if name not in ix["assigned"][src_mod]:
-            continue                    # the source module has no such module-level name
-        if (src_mod, name) not in ix["mutable"]:
-            continue                    # nobody reassigns it => the copy is safe
+        if name not in ix["assigned"][src_mod] or (src_mod, name) not in ix["mutable"]:
+            continue
         if (alias.asname or name) not in loaded:
-            continue                    # dead import; not reported
+            continue
         out.append(name)
     return out
 
@@ -484,35 +474,14 @@ def problems(paths=None, sources=None):
     return _derived_copy_problems(ix) + _mutable_copy_problems(ix)
 
 
-def collect(root, configured=False):
-    """Which `.py` files to collect -- see `gate.scanned_sources` (the single source of both policies)."""
-    return gate.scanned_sources(root, configured)
-
-
 def run(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    # ⚠️ **`REFLECT_SNAPSHOT_ROOT` empty => scan the suite's own `zreflect/`**,
-    # not "not enabled". (The README once stated this backwards: "empty => that
-    # gate says out loud it is off" -- measured: with the knob empty it still
-    # runs and reports `snapshot.ok` for the suite.)
-    # Why designed this way: this gate guards "mutable globals imported across
-    # modules", and the suite itself is the biggest victim (`gate.GATE_REPO`
-    # is rewritten by several self-proofs), so the default surface is the
-    # suite. To scan **your code**, set `REFLECT_SNAPSHOT_ROOT=<dir>`
-    # explicitly.
-    configured = os.environ.get(KNOB, "").strip()
-    # ⚠️ **Unset => anchor at the tool repo** (`gate.zdir()`), not a bare
-    # relative name -- the latter depends on cwd: correct when run from the
-    # repo root, but elsewhere (harness / hook cwd is not guaranteed) it dies
-    # with `scan_empty_dir` FATAL (measured: rc=2 after cd /tmp).
-    # Explicitly set => relative to the **audited repo** (the user writes a
-    # repo-root-relative name in the env file).
+    configured = (knobs.raw(KNOB) or "").strip()
     root = gate.zdir() if not configured \
         else os.path.join(gate.GATE_REPO, configured)
     if not os.path.isdir(root):
-        # knob points at a nonexistent directory => broken config (not "not enabled")
         return fatal(M("snapshot.scan_empty_dir", root=root))
-    paths = collect(root, configured=bool(configured))
+    paths = gate.py_sources(root)
     if not paths:
         return fatal(M("snapshot.scan_empty_dir", root=root))
     return finish(M("snapshot.title"), problems(paths),
@@ -538,15 +507,11 @@ def set_repo(p):
 
 
 def _fixtures():
-    """Fixture sources (English: they are the **inputs** being audited, not the module's own output).
+    """Fixture source dict for the self-proof.
 
-    ⚠️ Must be constructed **inside a function**, not as module-level
-    constants: the gate scans exactly "expressions assigned at module top
-    level", so module-level fixtures would be flagged by the gate itself as
-    derived snapshots -- measured: after hoisting to module level it
-    self-reported
-    `snapshot.derived_copy(derived='fx["ok_style"]', source='gate')`.
-    The criterion was right; the fixtures sat at the wrong layer.
+    Built inside a function, never as module-level constants: the gate scans
+    module-level assignments, so hoisting these would make the gate report its
+    own fixtures as derived snapshots.
     """
     return {
         "good": "GATE_REPO = \"/repo\"\nCONST = [1]\n",
@@ -559,7 +524,7 @@ def _fixtures():
 
 
 def _cases_value_copy(fx):
-    """1. Value copies: constants safe / attribute style safe / a copied mutable global must be reported."""
+    """Value copies: constants/attribute reads pass; mutable global imports fail."""
     return [
         ("snapshot.constant_copy_is_fine",
          lambda: problems(sources={"gate": fx["good"],
@@ -571,39 +536,41 @@ def _cases_value_copy(fx):
          lambda: [p.code for p in problems(
              sources={"gate": fx["bad_gate"], "check_x": fx["bad_user"]})
          ] == ["snapshot.mutable_copy"]),
-        # dead imports are not reported (importing something unused is not a risk)
         ("snapshot.dead_import_not_reported",
          lambda: problems(sources={
              "gate": fx["bad_gate"],
              "check_x": "from gate import GATE_REPO\n"}) == []),
-        # aliased module assignment (`import gate as g; g.GATE_REPO = ...`) --
-        # another spelling of the same act as `gate.GATE_REPO = ...`;
-        # previously missed (measured: [])
         ("\u2605 snapshot.mutable_copy_via_alias",
          lambda: [p.code for p in problems(sources={
              "gate": ALIAS_GATE, "usr": ALIAS_USER, "victim": ALIAS_VICTIM})
          ] == ["snapshot.mutable_copy"]),
-        # discovery-based source modules: **any .py in the scan surface** can
-        # be a source module, not just the 12 names on the old hand-written
-        # roster (previously all 16 check_*.py were invisible)
         ("\u2605 snapshot.source_from_any_module",
          lambda: [p.code for p in problems(sources={
              "check_zzz": CHECK_AS_SOURCE, "victim": CHECK_AS_VICTIM})
          ] == ["snapshot.mutable_copy"]),
+        ("\u2605 snapshot.inplace_dict_and_list_mutations",
+         lambda: [p.code for p in problems(sources={
+             "cfg": "CACHE = {}\nITEMS = []\ndef f():\n    CACHE['k'] = 1\n    ITEMS.append(2)\n",
+             "u1": "from cfg import CACHE\nprint(CACHE)\n",
+             "u2": "from cfg import ITEMS\nprint(ITEMS)\n",
+         })] == ["snapshot.mutable_copy", "snapshot.mutable_copy"]),
+        ("\u2605 snapshot.star_and_relative_imports",
+         lambda: [p.code for p in problems(sources={
+             "gate": fx["bad_gate"],
+             "u_star": "from gate import *\n",
+             "u_rel": "from .gate import GATE_REPO\nprint(GATE_REPO)\n",
+         })] == ["snapshot.mutable_copy", "snapshot.mutable_copy"]),
     ]
 
 
 def _cases_derived():
-    """2. Derived snapshots: the top level stores an expression that reaches a mutable global through a thin wrapper as a constant."""
+    """Derived snapshots: top-level calls reading mutable globals."""
     return [
-        # `OUT = repo(NAME)`, whose repo() body reads GATE_REPO => frozen at import time
         ("\u2605 snapshot.derived_copy",
          lambda: [p.code for p in problems(sources={
              "gate": GATE_WITH_REPO,
              "facts": "OUT = repo('L.json')\nprint(OUT)\n"})
          ] == ["snapshot.derived_copy"]),
-        # annotated derivation (`OUT: str = repo(...)`) -- previously only
-        # `ast.Assign` was accepted, missing AnnAssign (review measured `[]`)
         ("\u2605 snapshot.derived_copy_annotated",
          lambda: [p.code for p in problems(sources={
              "gate": GATE_WITH_REPO,
@@ -613,28 +580,15 @@ def _cases_derived():
 
 
 def _default_root_case():
-    """The default scan surface anchors at the tool repo, independent of cwd.
-
-    ⚠️ Previously, with the knob unset, a bare relative name `zreflect` was
-    used -- correct when run from the repo root, but from elsewhere (harness /
-    hook cwd is not guaranteed) it died with `scan_empty_dir` FATAL (measured:
-    rc=2 after cd /tmp). This case **switches to a temp directory** before
-    running the real gate, pinning "cwd is not a prerequisite".
-    """
+    """Default scan anchors at tool repo regardless of cwd."""
     import subprocess  # noqa: PLC0415
     import tempfile  # noqa: PLC0415
-    here = os.path.dirname(os.path.abspath(__file__))
     d = tempfile.mkdtemp()
     env = {k: v for k, v in os.environ.items() if k != KNOB}
     try:
-        p = subprocess.run([sys.executable, os.path.join(here, __file__)],
+        p = subprocess.run([sys.executable, os.path.abspath(__file__)],
                            cwd=d, env=env, capture_output=True, text=True,
                            timeout=120, encoding="utf-8", errors="replace")
-        # ⚠️ Assert only the **rc**, never match output wording:
-        # `snapshot.ok(...)` is a code; with a language pack installed it
-        # renders as natural language (measured: this case went red under
-        # REFLECT_LANG=en -- it was using the current language pack's wording
-        # as the criterion, making the first version its own counterexample).
         return p.returncode == 0
     finally:
         import shutil  # noqa: PLC0415

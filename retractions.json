@@ -1,1 +1,40 @@
-{"schema": 1, "retractions": []}
+{
+  "schema": 1,
+  "retractions": [
+    {
+      "id": "R-figure-size-20261109",
+      "text": "14.6 MB",
+      "why": "体积不是排除 DigitalJS 的依据：课程站已自带 56 MB 的 Pyodide/Octave WASM 内核，整个 站点/ 是 138 MB；14.6 MB 是 npm 解包体积（含源码、map、测试页），实际浏览器 JS 只有 2.9 MB。用体积当理由是把两个不同的数混了。",
+      "evidence": "python3 -c \"s=open('questions/02-figure-live-renderer.md',encoding='utf-8').read();assert 'R-figure-size-20261109' in s and '2.9 MB' in s\"",
+      "fixed_in": "mail/081（课程站）；questions/02-figure-live-renderer.md 结案补记"
+    },
+    {
+      "id": "R-figure-digitaljs-ansi-20261109",
+      "text": "too heavy, own IR",
+      "why": "排除 DigitalJS 的真实依据是符号体例与实测结果：src/cells/gates.mjs 用 and_path/or_path 画 ANSI 曲线门，课程站硬要求 IEC 60617 方框；运行时覆盖层实测失败（门重叠、覆盖 0 只门），该路径已废弃。",
+      "evidence": "python3 -c \"import os;s=open('questions/02-figure-live-renderer.md',encoding='utf-8').read();assert not os.path.exists('deliverables/figure-live-digitaljs') and 'and_path' in s\"",
+      "fixed_in": "mail/081（课程站）；questions/02-figure-live-renderer.md 结案补记"
+    },
+    {
+      "id": "R-figure-geometry-20261109",
+      "text": "六类坏状不再出现",
+      "why": "080/方案 §2 声称六类坏状不再出现，但 shipped fixture 上第①③条被证伪：自算主输入扇出有 14 段导线穿门框（课程站 083 用 vendored ELK 复算 + 线段×门框求交实测），我的检查器当时只 grep 字符串、没有几何判据。已改为扇出全部交给 ELK（主输入建为 partition 0 节点），并新增 geometry.mjs 做 wire×box / wire×text 求交。",
+      "evidence": "node deliverables/figure-live/geometry.mjs --selftest",
+      "fixed_in": "deliverables/figure-live/geometry.mjs；mail/084（课程站）"
+    },
+    {
+      "id": "R-figure-file-protocol-20261109",
+      "text": "双击 `file://` 就能开",
+      "why": "079/080 写验证件双击 file:// 可开，但当时用 fetch() 读本地 JSON，Chrome/Firefox 默认拦截 file:// 页面的本地 fetch。已把两份数据内联进 HTML 的 application/json script 块，file:// 现在确实可开；同时修掉 svg{max-width:100%} 把放大档钳回容器宽的问题。",
+      "evidence": "python3 -c \"s=open('deliverables/figure-live/index.html',encoding='utf-8').read();assert \\\"fetch('data/\\\" not in s and 'data-logic' in s\"",
+      "fixed_in": "deliverables/figure-live/index.html；mail/084（课程站）"
+    },
+    {
+      "id": "R-figure-812-swap-20261110",
+      "text": "已互换，现在是 R₀(1)←Q₂、R₀(2)←Q₁",
+      "why": "084 §2 声称 8.12 复位反馈已对调并读图复核，实际只改了 tex 的注释行，三条 \\draw 折线端点未动，复核未执行。两个独立审查子代理用图源坐标、SVG 反解、PNG 目视三方一致证实未改。现已真正改端点并用 build.sh 重建（SVG md5 c14a50ec 与重建产物一致）。",
+      "evidence": "python3 -c \"s=open('deliverables/figures-src/t812c.tex',encoding='utf-8').read();assert '(13.5,3.2) -- (14.0,3.2)' in s and '(7.4,2.5) -- (8.7,2.5)' in s\"",
+      "fixed_in": "deliverables/figures-src/t812c.tex + deliverables/figures-batch1/fig-8-12.svg；mail/085（课程站）"
+    }
+  ]
+}

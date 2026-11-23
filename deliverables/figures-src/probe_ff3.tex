@@ -1,0 +1,26 @@
+\documentclass[border=10pt]{standalone}
+\usepackage{ctex}
+\usepackage[european]{circuitikz}
+\begin{document}
+\begin{circuitikz}
+% 1. 下降沿 JK 触发器：c2=1 (clock), n2=1 (negation bubble), dot on notQ (n4=1)
+\draw (0,0) node[flipflop, flipflop def={t1=J, t2={\footnotesize C1}, t3=K, t6=Q, t4=Q, c2=1, n2=1, n4=1}] (ff1) {};
+\node[above] at (ff1.north) {JK (falling, Qbar with bubble)};
+
+% 2. 上升沿 D 触发器：c2=1 (clock), 无 bubble
+\draw (4,0) node[flipflop, flipflop def={t1=1D, t2={\footnotesize C1}, t6=Q, t4=Q, c2=1, n4=1}] (ff2) {};
+\node[above] at (ff2.north) {D (rising, Qbar with bubble)};
+
+% 3. 74LS290 / 74LS161 用 dipchip 或者 custom multiplexer?
+% circuitikz 提供了 dipchip
+% 还有 muxdemux / chips
+% 测试 dipchip:
+\draw (8,0) node[dipchip, num pins=12, hide numbers, no marks] (c1) {};
+
+% 测试 spdt 的不同方向和切换
+% spdt 的触点：
+\draw (0,-4) node[spdt] (sw1) {};
+\draw (3,-4) node[spdt, xscale=-1] (sw2) {};
+
+\end{circuitikz}
+\end{document}

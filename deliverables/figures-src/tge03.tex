@@ -1,0 +1,59 @@
+\documentclass[border=14pt]{standalone}
+\usepackage{ctex}
+\usepackage{tikz}
+\begin{document}
+\begin{tikzpicture}[x=1cm, y=1cm, font=\normalsize, line width=0.8pt]
+
+% fig-ge-03 R / L / C 相量伏安（中文；公式写图注不进图内）
+% 布局：每栏 5.2 宽，原点在 (0.6,1.6)；标签放箭头末端外侧；角度标注在弧正上方/下方
+
+\def\cw{5.2}
+\def\gap{1.6}
+
+% 栏宏：#1 x 位移 #2 栏名 #3 说明 #4 主体
+\newcommand{\sub}[4]{%
+  \begin{scope}[shift={(#1,0)}]
+    \node[anchor=south] at ({\cw/2},4.3) {#2};
+    \draw[->] (0.6,1.6) -- ({\cw-0.5},1.6) node[anchor=west, font=\small] {Re};
+    \draw[->] (0.6,1.6) -- (0.6,3.9) node[anchor=south, font=\small] {Im};
+    #4
+    \node[anchor=north, font=\small] at ({\cw/2},-1.30) {#3};
+  \end{scope}}
+
+% ── R：同相 ──
+\sub{0}{R}{U 与 I 同相}{
+  \draw[->, line width=1.4pt] (0.6,1.6) -- ++(2.8,1.3);
+  \node[anchor=south west, font=\small] at (0.6+2.8,1.6+1.3) {U};
+  \draw[->, line width=0.9pt, dashed] (0.6,1.6) -- ++(2.1,0.98);
+  \node[anchor=north west, font=\small] at (0.6+2.1,1.6+0.98) {I};
+}
+
+% ── L：I 滞后 U 90 deg ──
+\sub{{\cw+\gap}}{L}{}{
+  \draw[->, line width=1.4pt] (0.6,1.6) -- ++(2.8,1.3);
+  \node[anchor=south west, font=\small] at (0.6+2.8,1.6+1.3) {U};
+  % I：把 U 方向转 -90 → (1.3, -2.8)*0.45
+  \draw[->, line width=0.9pt, dashed] (0.6,1.6) -- ++(1.25,-2.0);
+  \node[anchor=north east, font=\small] at (0.6+1.10,1.6-1.95) {I};
+  % 角度弧：从 U 方向到 I 方向
+  \draw[->, line width=0.5pt] (1.9,2.2) arc (24.6:-58:0.9);
+  \node[anchor=north east, font=\small] at ({\cw/2},-1.30) {I 滞后 U};
+  \node[anchor=north west, font=\small] at ({\cw/2+0.06},-1.30) {90°};
+
+}
+
+% ── C：I 超前 U 90 deg ──
+\sub{{2*(\cw+\gap)}}{C}{}{
+  \draw[->, line width=1.4pt] (0.6,1.6) -- ++(2.8,1.3);
+  \node[anchor=south west, font=\small] at (0.6+2.8,1.6+1.3) {U};
+  % I：把 U 方向转 +90 → (-1.3, 2.8)*0.45
+  \draw[->, line width=0.9pt, dashed] (0.6,1.6) -- ++(-1.25,2.0);
+  \node[anchor=south east, font=\small] at (-0.65,3.6) {I};
+  \draw[->, line width=0.5pt] (1.9,2.2) arc (24.6:114.6:0.9);
+  \node[anchor=north east, font=\small] at ({\cw/2},-1.30) {I 超前 U};
+  \node[anchor=north west, font=\small] at ({\cw/2+0.06},-1.30) {90°};
+
+}
+
+\end{tikzpicture}
+\end{document}

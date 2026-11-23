@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>活图验证件 · 7 门逻辑图 + 多行波形</title>
+<style>
+  :root {
+    --fg: #1b1b1b; --bg: #ffffff; --muted: #5c6470; --line: #20242a;
+    --accent: #1164a3; --box: #f6f8fa; --panel: #f2f4f7;
+  }
+  :root[data-theme="dark"] {
+    --fg: #e8eaed; --bg: #16191d; --muted: #9aa4b2; --line: #d6dbe2;
+    --accent: #6cb6ff; --box: #1e2228; --panel: #20252c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 1.2rem; font: 15px/1.55 system-ui, sans-serif;
+         color: var(--fg); background: var(--bg); }
+  h1 { font-size: 1.25rem; margin: 0 0 .3rem; }
+  p.hint { color: var(--muted); margin: 0 0 1rem; }
+  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+  button, select { font: inherit; padding: .35rem .7rem; color: var(--fg);
+                   background: var(--box); border: 1px solid var(--muted); border-radius: 4px; cursor: pointer; }
+  button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .panels { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+  @media (min-width: 900px) { .panels { grid-template-columns: 2fr 1fr; } }
+  .panel { background: var(--box); border: 1px solid var(--muted); border-radius: 6px; padding: .8rem; }
+  .panel h2 { font-size: 1rem; margin: 0 0 .5rem; }
+  svg { height: auto; background: var(--bg); }
+  #logic-wrap { overflow: auto; }
+  #logic-svg { min-height: 280px; }
+  #logic-svg .gate rect { fill: var(--box); stroke: var(--line); stroke-width: 1.4; }
+  #logic-svg text { fill: var(--fg); font-family: system-ui, sans-serif; font-size: 13px; }
+  #logic-svg .wire { stroke: var(--line); stroke-width: 1.3; fill: none; }
+  #logic-svg .gate.hot rect { stroke: var(--accent); stroke-width: 2.2; }
+  #logic-svg .gate { cursor: pointer; }
+  pre { white-space: pre-wrap; word-break: break-word; font: 12px/1.5 ui-monospace, monospace;
+        margin: 0; color: var(--fg); }
+  .status { font: 13px ui-monospace, monospace; color: var(--muted); }
+  #wave svg text { fill: var(--fg); }
+  #wave svg path, #wave svg line, #wave svg rect { stroke: var(--line); }
+  .inspect { margin-top: .5rem; font: 13px ui-monospace, monospace; min-height: 2em; }
+  .theme-note { color: var(--muted); font-size: .85rem; }
+  .ref-rails { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+               margin-top: .5rem; font: 12px ui-monospace, monospace; }
+  .rail { display: inline-block; width: 46px; height: 0; border-top: 2px solid var(--line); }
+  .rail-hi { transform: translateY(-5px); border-color: var(--accent); }
+  .rail-lo { transform: translateY(5px); }
+</style>
+</head>
+<body>
+<h1>活图验证件：7 门逻辑图 + 多行波形</h1>
+<p class="hint">纯静态、无服务端、无 CDN。点门看属性；拨输入立刻重算并标出受影响的门；
+  换主题、缩放都走 CSS 变量 / SVG，不重烘位图。右侧文本投影与图形来自同一份 JSON。</p>
+
+<div class="bar">
+  <label>A <select id="in-A"><option>0</option><option selected>1</option></select></label>
+  <label>B <select id="in-B"><option>0</option><option selected>1</option></select></label>
+  <label>C <select id="in-C"><option selected>0</option><option>1</option></select></label>
+  <label>D <select id="in-D"><option>0</option><option selected>1</option></select></label>
+  <button id="theme" type="button">切换主题</button>
+  <button id="zoom-out" type="button">缩小</button>
+  <button id="zoom-in" type="button">放大</button>
+  <span id="zoom-level" class="status">缩放 100%</span>
+</div>
+
+<div class="panels">
+  <div>
+    <section class="panel">
+      <h2>① 逻辑图（ELK 分层 + 端口约束 + 正交走线）</h2>
+      <div id="logic-wrap"><svg id="logic-svg" role="img" aria-label="七门逻辑电路图"></svg></div>
+      <div class="inspect" id="inspect" aria-live="polite">点一只门查看属性。</div>
+    </section>
+    <section class="panel" style="margin-top:1rem">
+      <h2>② 多行波形（WaveDrom / WaveJSON）</h2>
+      <div id="wave"></div>
+  <div class="ref-rails" aria-label="电平参考轨">
+    <span>1（高）</span><span class="rail rail-hi"></span>
+    <span>0（低）</span><span class="rail rail-lo"></span>
+    <span class="theme-note">恒高 EN 对齐高轨、恒低 Q 对齐低轨；平线不再无参照。</span>
+  </div>
+    </section>
+  </div>
+  <div>
+    <section class="panel">
+      <h2>文本投影（给大模型读）</h2>
+      <pre id="projection"></pre>
+    </section>
+    <section class="panel" style="margin-top:1rem">
+      <h2>来源与许可证</h2>
+      <pre id="provenance"></pre>
+      <p class="theme-note">主题色全部来自 CSS 变量；SVG 内文字是 text 节点，
+        页面内搜索可命中，缩放用 viewBox 而非位图。</p>
+    </section>
+  </div>
+</div>
+
+<script type="application/json" id="data-logic">
+{
+  "id": "demo-7gate",
+  "title": "习题 7.14：三只非门 + 四只与非门实现 Y = A·D̄ + B̄·C·D̄ + B·C̄·D̄",
+  "inputs": {
+    "A": 1,
+    "B": 1,
+    "C": 0,
+    "D": 1
+  },
+  "gates": [
+    {
+      "id": "nB",
+      "type": "not",
+      "in": [
+        "B"
+      ],
+      "label": "1"
+    },
+    {
+      "id": "nC",
+      "type": "not",
+      "in": [
+        "C"
+      ],
+      "label": "1"
+    },
+    {
+      "id": "nD",
+      "type": "not",
+      "in": [
+        "D"
+      ],
+      "label": "1"
+    },
+    {
+      "id": "p1",
+      "type": "nand",
+      "in": [
+        "A",
+        "nD"
+      ],
+      "label": "&"
+    },
+    {
+      "id": "p2",
+      "type": "nand",
+      "in": [
+        "nB",
+        "C",
+        "nD"
+      ],
+      "label": "&"
+    },
+    {
+      "id": "p3",
+      "type": "nand",
+      "in": [
+        "B",
+        "nC",
+        "nD"
+      ],
+      "label": "&"
+    },
+    {
+      "id": "Y",
+      "type": "nand",
+      "in": [
+        "p1",
+        "p2",
+        "p3"
+      ],
+      "label": "&"
+    }
+  ],
+  "outputs": [
+    "Y",
+    "p1",
+    "p2",
+    "p3"
+  ],
+  "wireStyles": {
+    "nD": {
+      "color": "#1164a3",
+      "dash": "dashed"
+    },
+    "p1": {
+      "color": "#b3541e"
+    },
+    "p2": {
+      "dash": "dashed"
+    }
+  }
+}
+</script>
+<script type="application/json" id="data-wave">
+{
+  "id": "demo-wave",
+  "title": "CP / D / Q / EN 四行时序；含恒高与恒低参考",
+  "signals": [
+    {
+      "name": "CP",
+      "wave": "0.1.0.1.0.1.0.1.0",
+      "note": "四个正脉冲"
+    },
+    {
+      "name": "D",
+      "wave": "1....0....1......",
+      "note": "中段宽低凹口"
+    },
+    {
+      "name": "Q",
+      "wave": "0................",
+      "note": "恒低：靠参考轨辨认"
+    },
+    {
+      "name": "EN",
+      "wave": "1................",
+      "note": "恒高：靠参考轨辨认"
+    }
+  ]
+}
+</script>
+<script src="graph.js"></script>
+<script src="vendor/elk.bundled.js"></script>
+<script src="vendor/wavedrom.unpkg.min.js"></script>
+<script>
+'use strict';
+const $ = (s) => document.querySelector(s);
+
+const TRUTH = {
+  and:  (a) => a.reduce((x, y) => x & y, 1),
+  nand: (a) => 1 - a.reduce((x, y) => x & y, 1),
+  or:   (a) => a.reduce((x, y) => x | y, 0),
+  nor:  (a) => 1 - a.reduce((x, y) => x | y, 0),
+  not:  (a) => 1 - a[0],
+};
+
+function evaluate(data) {
+  const v = {...data.inputs};
+  for (const g of data.gates) v[g.id] = TRUTH[g.type](g.in.map((n) => v[n]));
+  return v;
+}
+
+function project(data, values) {
+  const lines = [
+    '# netlist (one line per gate, IEC operator in brackets)',
+  ];
+  for (const g of data.gates)
+    lines.push(`${g.id} [${g.type}] in=${g.in.join(',')} out=${g.id} value=${values[g.id]}`);
+  lines.push('', '# primary inputs', ...Object.entries(data.inputs).map(([k, x]) => `${k}=${x}`));
+  lines.push('', '# observable outputs');
+  for (const o of data.outputs) lines.push(`${o}=${values[o]}`);
+  const styles = data.wireStyles || {};
+  if (Object.keys(styles).length) {
+    lines.push('', '# wire styles (per net: color / solid|dashed)');
+    for (const [net, st] of Object.entries(styles))
+      lines.push(`${net}: color=${st.color || 'theme'} dash=${st.dash || 'solid'}`);
+  }
+  return lines.join('\n');
+}
+
+async function layout(data) {
+  const {buildGraph, GATE_W, GATE_H} = window.FigureGraph;
+  const out = await new ELK().layout(buildGraph(data));
+  return {out, W: GATE_W, H: GATE_H};
+}
+
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, text) {
+  const n = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) n.setAttribute(k, v);
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+function render(data, positioned, values) {
+  const svg = $('#logic-svg');
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const {out, W, H} = positioned;
+  const nodes = new Map(out.children.map((c) => [c.id, c]));
+  const pad = 24;
+  const width = Math.max(...out.children.map((c) => c.x + c.width)) + pad * 2;
+  const height = Math.max(...out.children.map((c) => c.y + c.height)) + pad * 2;
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  svg.setAttribute('width', width);
+  svg.setAttribute('height', height);
+
+  // every wire is an ELK edge section, primary-input fan-out included.
+  // Per-net style knobs (data.wireStyles, keyed by source net): color, dash.
+  const styles = data.wireStyles || {};
+  const wires = el('g', {class: 'wires'});
+  for (const e of out.edges || []) {
+    const net = e.id.replace(/^e-/, '').replace(/-[^-]+-\d+$/, '');
+    const st = styles[net] || {};
+    for (const s of e.sections || []) {
+      const pts = [s.startPoint, ...(s.bendPoints || []), s.endPoint];
+      const attrs = {class: 'wire', points: pts.map((p) => `${p.x},${p.y}`).join(' ')};
+      if (st.color) attrs.style = `stroke:${st.color}`;
+      if (st.dash === 'dashed') attrs['stroke-dasharray'] = '6 4';
+      wires.appendChild(el('polyline', attrs));
+    }
+  }
+  svg.appendChild(wires);
+
+  const ins = el('g', {class: 'inputs'});
+  for (const c of out.children) {
+    if (!c.id.startsWith('in:')) continue;
+    const n = c.id.slice(3);
+    ins.appendChild(el('rect', {
+      x: c.x, y: c.y, width: c.width, height: c.height,
+      fill: 'var(--box)', stroke: 'var(--line)', 'stroke-width': '1.3',
+    }));
+    ins.appendChild(el('text', {x: c.x + c.width / 2, y: c.y - 5,
+                                'text-anchor': 'middle', 'font-size': '11'},
+                       `${n}=${values[n]}`));
+  }
+  svg.appendChild(ins);
+
+  const gates = el('g', {class: 'gates'});
+  for (const g of data.gates) {
+    const c = nodes.get(g.id);
+    const grp = el('g', {class: 'gate', tabindex: '0', role: 'button',
+                         'aria-label': `${g.id} ${g.type}`, 'data-id': g.id});
+    grp.appendChild(el('rect', {x: c.x, y: c.y, width: W, height: H, rx: 0}));
+    grp.appendChild(el('text', {x: c.x + W / 2, y: c.y + H / 2 - 2,
+                                'text-anchor': 'middle'}, g.label));
+    grp.appendChild(el('text', {x: c.x + W / 2, y: c.y + H - 7,
+                                'text-anchor': 'middle', 'font-size': '10'},
+                       `${g.id} · ${g.type}=${values[g.id]}`));
+    if (g.type === 'nand' || g.type === 'nor' || g.type === 'not')
+      grp.appendChild(el('circle', {cx: c.x + W + 4, cy: c.y + H / 2, r: 3.5,
+                                    fill: 'var(--bg)', stroke: 'var(--line)'}));
+    const show = () => {
+      $('#inspect').textContent =
+        `${g.id}: type=${g.type}, inputs=[${g.in.join(', ')}], values=[${g.in.map((n) => values[n]).join(', ')}], output=${values[g.id]}`;
+      for (const n of svg.querySelectorAll('.gate.hot')) n.classList.remove('hot');
+      grp.classList.add('hot');
+    };
+    grp.addEventListener('click', show);
+    grp.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); show(); } });
+    gates.appendChild(grp);
+  }
+  svg.appendChild(gates);
+}
+
+async function renderWave(data) {
+  const signals = data.signals.map((s) => ({name: s.name, wave: s.wave}));
+  // WaveDrom's renderWaveForm writes into a div id "<output><index>".
+  const host = $('#wave');
+  while (host.firstChild) host.removeChild(host.firstChild);
+  const box = document.createElement('div');
+  box.id = 'waveout0';
+  host.appendChild(box);
+  window.WaveSkin = wavedrom.waveSkin;
+  wavedrom.renderWaveForm(0, {signal: signals}, 'waveout');
+  // wave labels + level strings are exposed verbatim in the text projection.
+}
+
+async function main() {
+  const logic = JSON.parse(document.getElementById('data-logic').textContent);
+  const wave = JSON.parse(document.getElementById('data-wave').textContent);
+  const positioned = await layout(logic);
+
+  async function redraw() {
+    for (const k of Object.keys(logic.inputs))
+      logic.inputs[k] = Number($(`#in-${k}`).value);
+    const values = evaluate(logic);
+    render(logic, positioned, values);
+    const levels = Object.fromEntries(wave.signals.map((s) => [s.name, s.wave]));
+    $('#projection').textContent = project(logic, values) + '\n\n# waveform levels\n' +
+      Object.entries(levels).map(([k, v]) => `${k}: ${v}`).join('\n');
+  }
+  for (const k of Object.keys(logic.inputs)) $(`#in-${k}`).addEventListener('change', redraw);
+  $('#theme').addEventListener('click', () => {
+    const root = document.documentElement;
+    root.dataset.theme = root.dataset.theme === 'dark' ? '' : 'dark';
+  });
+  let zoom = 1;
+  const applyZoom = () => {
+    $('#logic-svg').style.width = `${100 * zoom}%`;
+    $('#zoom-level').textContent = `缩放 ${Math.round(zoom * 100)}%`;
+  };
+  $('#zoom-in').addEventListener('click', () => { zoom = Math.min(2.5, zoom + .25); applyZoom(); });
+  $('#zoom-out').addEventListener('click', () => { zoom = Math.max(.5, zoom - .25); applyZoom(); });
+
+  $('#provenance').textContent = [
+    'elkjs 0.13.0 — EPL-2.0 OR GPL-3.0-or-later — 8.2 MB unpacked',
+    '  vendor/elk.bundled.js + vendor/ELK-LICENSE',
+    'wavedrom 3.8.0 — MIT — 835 KB unpacked',
+    '  vendor/wavedrom.unpkg.min.js + vendor/WAVEDROM-LICENSE',
+    'data/logic-7gate.json / data/wave-multirow.json',
+  ].join('\n');
+
+  await redraw();
+  await renderWave(wave);
+  document.body.dataset.ready = '1';
+}
+
+main().catch((e) => { $('#inspect').textContent = `ERROR: ${e.stack || e}`; });
+</script>
+</body>
+</html>

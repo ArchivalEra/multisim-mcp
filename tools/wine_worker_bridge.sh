@@ -95,7 +95,6 @@ fi
 
 # Map POSIX paths inside the bootstrap to Wine's Z:\ drive form:
 # '/mnt/hdd/...' inside a Python string literal → 'Z:\mnt\hdd\...'.
-win_bootstrap="${bootstrap//Z:/Z:}"
 if [[ "$bootstrap" == *"'/mnt/"* || "$bootstrap" == *"\"/mnt/"* || "$bootstrap" == *"'/home/"* ]]; then
   # Only rewrite path-like segments, not the whole code string.
   while [[ "$bootstrap" =~ (/mnt/[^\'\"]*|/home/[^\'\"]*) ]]; do

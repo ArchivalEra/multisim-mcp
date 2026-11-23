@@ -1,0 +1,31 @@
+\documentclass[border=10pt]{standalone}
+\usepackage{ctex}
+\usepackage[european]{circuitikz}
+\begin{document}
+\begin{circuitikz}
+% 测试 flipflop def 的各种选项
+% c2=1 (clock on pin 2), d2=1 (negation dot on pin 2), cu2=1 (clock up/down)
+\draw (0,0) node[flipflop, flipflop def={t1=J, t2={\footnotesize C1}, t3=K, t6=Q, t4={\ctikztextnot{Q}}, c2=1, d2=1}] (ff1) {};
+\node[above] at (ff1.north) {JK falling edge};
+
+\draw (4,0) node[flipflop, flipflop def={t1=1D, t2={\footnotesize C1}, t6=Q, t4={\ctikztextnot{Q}}, c2=1}] (ff2) {};
+\node[above] at (ff2.north) {D rising edge};
+
+% 测试 dipchip
+\draw (8,0) node[dipchip, num pins=12, hide numbers, no marks] (chip) {};
+% 测试 dipchip 引脚引出
+\draw (chip.pin 1) -- ++(-0.5,0);
+
+% 测试 spdt 引脚名称
+\draw (0,-4) node[spdt] (sw) {};
+\draw (sw.in) node[left] {in};
+\draw (sw.out 1) node[right] {out1};
+\draw (sw.out 2) node[right] {out2};
+
+\draw (4,-4) node[spdt, xscale=-1] (sw_rev) {};
+\draw (sw_rev.in) node[right] {in};
+\draw (sw_rev.out 1) node[left] {out1};
+\draw (sw_rev.out 2) node[left] {out2};
+
+\end{circuitikz}
+\end{document}
