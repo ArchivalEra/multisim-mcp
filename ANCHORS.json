@@ -1,6 +1,6 @@
 {
   "approver_pub": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAvf9ckQEI6CkK30ookgtqjT6I3H0PXzo6ov25212pyDQ=\n-----END PUBLIC KEY-----\n",
-  "knobs_sha256": "be24e04d1893c4d25e34995342500fdbff7b31f90766b5f2dc0e590be8b741eb",
+  "knobs_sha256": "8982a034940352c9b4e688eae159310707733a1e7031b4f895d571aaff6d7d2b",
   "local_scripts": {
     "reflect-local/figure_live_criteria.py": "1f6db8dea5f6180770445d870a45a54218fe31e9705f4d1ebaa06ed4c243e3c6",
     "reflect-local/goal_multisim_criteria.py": "5d8517313a0f94574a9f1450cc1ea2cc3227ab9c5a1d9ea5fe3d46f2302250b8",

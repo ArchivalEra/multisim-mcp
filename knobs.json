@@ -3,6 +3,6 @@
   "REFLECT_DOCS": "STATE.md,PRINCIPLES.md,AGENTS.md",
   "REFLECT_MEASURE_MODULE": "measure_example",
   "REFLECT_OFF_GATES": "check_ab.py,check_instruments.py,check_invariants.py,check_locks.py,check_pins.py,check_secrets.py,check_world.py,doctor.py",
-  "REFLECT_READMES": "README.md",
+  "REFLECT_READMES": "README.md,README.en.md",
   "REFLECT_REPLAY_TIMEOUT": "30"
 }

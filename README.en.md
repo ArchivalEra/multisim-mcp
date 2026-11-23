@@ -184,6 +184,23 @@ See the [publishing guide](docs/PUBLISHING.md) and
 
 ## Quick start
 
+### AI Agent Preview installation
+
+Run the following command in the source directory to generate MCP configurations
+for multiple agents. The agent can be 64-bit, while `-Python32` must point to
+a 32-bit Python environment with `pywin32` installed and Multisim access:
+
+```powershell
+.\tools\install-agent.ps1 `
+  -Client all `
+  -Python32 C:\path\to\python32\python.exe
+```
+
+Generated configs are written to `generated-config/`. Copy the
+`mcpServers.multisim` entry into Qwen, ChatGPT, DeepSeek, or other MCP-capable
+agents, restart the client, and verify with `runtime_status`. See
+[`docs/MULTI_CLIENT_INSTALL.md`](docs/MULTI_CLIENT_INSTALL.md) for boundaries.
+
 The simplest compatible deployment still installs into 32-bit Python:
 
 ```powershell
@@ -221,8 +238,13 @@ By default, they do not start Multisim or modify an existing client
 configuration:
 
 ```powershell
+# Human-readable diagnostics with step-by-step remediation when incomplete.
 C:\path\to\python32\Scripts\multisim-mcp.exe doctor --lang en
+
+# Optional: explicitly launch/connect Multisim to verify license & COM activation.
 C:\path\to\python32\Scripts\multisim-mcp.exe doctor --lang en --connect
+
+# Stable JSON for agents/scripts; pass --strict for CI gates.
 C:\path\to\python32\Scripts\multisim-mcp.exe --json doctor
 
 # Print a Claude Desktop JSON fragment.
@@ -313,6 +335,14 @@ Manual MCP client configuration:
   }
 }
 ```
+
+## Repository structure
+
+- `mcp_server/`: MCP server, COM adapter, schematic builders, and tests.
+- `skills/multisim-workflow/`: agent-facing experiment workflow skills.
+- `docs/`: architecture, measured workflows, and capability boundaries.
+- `analysis/`, `tools/`: interoperability research utilities; audit provenance and privacy before publishing.
+- `zreflect/`, `reflect-local/`: Einfacht Trust v2 verification suite and repo-local criteria (`STATE.md`, `PRINCIPLES.md`).
 
 ## Security
 

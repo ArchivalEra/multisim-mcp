@@ -387,6 +387,7 @@ job 存储格式保持兼容；实验 staging、报告、原子发布和回滚�
 - `skills/multisim-workflow/`：面向 Agent 的实验工作流。
 - `docs/`：架构、实测流程和能力边界。
 - `analysis/`、`tools/`：互操作研究材料；发布前需要独立做来源和隐私审计。
+- `zreflect/`、`reflect-local/`：Einfacht Trust v2 门禁套件与仓库本地校验规则（见 `STATE.md`、`PRINCIPLES.md`）。
 
 ## 安全
 
